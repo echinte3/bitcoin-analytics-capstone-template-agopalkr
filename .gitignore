@@ -215,9 +215,9 @@ tmp_capstone_data/
 *.log
 
 *.parquet
-*.csv
 *.png  
 *.jpg
 *.jpeg
 *.gif
 *.webp
+data/Coin Metrics/coinmetrics_btc.csv
