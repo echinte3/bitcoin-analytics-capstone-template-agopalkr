@@ -21,7 +21,7 @@ logging.basicConfig(
 )
 
 # Configuration
-BACKTEST_START = "2019-01-01"
+BACKTEST_START = "2018-01-01"
 BACKTEST_END = "2025-12-31"
 INVESTMENT_WINDOW = 12  # months (deprecated: use WINDOW_OFFSET for consistency)
 PURCHASE_FREQ = "Daily"  # Daily frequency for DCA purchases
