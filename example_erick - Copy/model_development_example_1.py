@@ -115,38 +115,6 @@ def load_fgi_data() -> pd.DataFrame:
 
         
 # =============================================================================
-<<<<<<< Updated upstream
-=======
-# S&P Data Loading
-# =============================================================================
-def load_snp_data() -> pd.DataFrame:
-    """Load S&P 500 data and compute 20-day MA distance."""
-    base_dir = Path(__file__).parent.parent
-    file_path = base_dir / "data" / "SP500.csv"
-    
-    if not file_path.exists():
-        logging.warning("S&P 500 data not found. Macro signal will default to neutral.")
-        return pd.DataFrame()
-        
-    try:
-        df = pd.read_csv(file_path)
-        df['Date'] = pd.to_datetime(df['Date']).dt.normalize()
-        df = df.set_index('Date').sort_index()
-        
-        # Calculate 20-day MA
-        df['snp_ma'] = df['Close'].rolling(20, min_periods=10).mean()
-        
-        # Calculate distance from MA (Positive = Uptrend, Negative = Downtrend)
-        df['snp_vs_ma'] = (df['Close'] / df['snp_ma']) - 1.0
-        
-        return df[['Close', 'snp_ma', 'snp_vs_ma']]
-        
-    except Exception as e:
-        logging.error(f"Failed to process S&P 500 data: {e}")
-        return pd.DataFrame()
-
-# =============================================================================
->>>>>>> Stashed changes
 # Model-Specific Data Loading
 # =============================================================================
 
@@ -487,24 +455,6 @@ def precompute_features(df: pd.DataFrame) -> pd.DataFrame:
         logging.warning(f"FGI sentiment not available: {e}")
         fgi_sentiment = pd.Series(0.5, index=price.index)
 
-<<<<<<< Updated upstream
-=======
-    # =========================================================================
-    # [NEW] Load S&P 500 Macro Environment
-    # =========================================================================
-    try:
-        snp_df = load_snp_data()
-        if not snp_df.empty:
-            # Reindex to price, forward fill weekends/holidays, fill early history with 0.0 (neutral)
-            snp_vs_ma = snp_df["snp_vs_ma"].reindex(price.index).ffill().fillna(0.0)
-        else:
-            snp_vs_ma = pd.Series(0.0, index=price.index)
-    except Exception as e:
-        logging.warning(f"S&P 500 data not available: {e}")
-        snp_vs_ma = pd.Series(0.0, index=price.index)
-
-
->>>>>>> Stashed changes
     # Build and lag features
     features = pd.DataFrame(
         {
@@ -519,10 +469,6 @@ def precompute_features(df: pd.DataFrame) -> pd.DataFrame:
             "signal_confidence": signal_confidence,
             "polymarket_sentiment": polymarket_sentiment,
             "fgi_sentiment": fgi_sentiment,  # <-- [NEW] Added to the main dataframe
-<<<<<<< Updated upstream
-=======
-            "snp_vs_ma": snp_vs_ma, # <-- [NEW] Added here
->>>>>>> Stashed changes
         },
         index=price.index,
     )
@@ -537,10 +483,6 @@ def precompute_features(df: pd.DataFrame) -> pd.DataFrame:
         "mvrv_volatility",
         "polymarket_sentiment",
         "fgi_sentiment",  # <-- [NEW] Ensures FGI is shifted by 1 day!
-<<<<<<< Updated upstream
-=======
-        "snp_vs_ma",  # <-- [NEW] Stock market data is now safely time-shifted
->>>>>>> Stashed changes
     ]
     features[signal_cols] = features[signal_cols].shift(1)
 
@@ -709,11 +651,6 @@ def compute_dynamic_multiplier(
     signal_confidence: np.ndarray | None = None,
     polymarket_sentiment: np.ndarray | None = None,
     fgi_sentiment: np.ndarray | None = None,  # <-- [NEW] Added FGI parameter
-<<<<<<< Updated upstream
-=======
-    snp_vs_ma: np.ndarray | None = None, # <-- [NEW] Added S&P parameter
-    weights: dict | None = None,  # <-- [NEW] Add weights parameter
->>>>>>> Stashed changes
 ) -> np.ndarray:
     """Compute weight multiplier from MVRV, MA, and Sentiment signals.
 
@@ -740,13 +677,6 @@ def compute_dynamic_multiplier(
     Returns:
         Multipliers centered around 1.0
     """
-<<<<<<< Updated upstream
-=======
-    # [NEW] Default weights if none are provided
-    if weights is None:
-        weights = {'mvrv': 0.50, 'ma': 0.15, 'fgi': 0.15, 'snp': 0.10, 'poly': 0.10}
-
->>>>>>> Stashed changes
     # Default to neutral if not provided
     if mvrv_acceleration is None:
         mvrv_acceleration = np.zeros_like(mvrv_zscore)
@@ -760,13 +690,7 @@ def compute_dynamic_multiplier(
     # [NEW] Default FGI to neutral 0.5 (neither fear nor greed)
     if fgi_sentiment is None:
         fgi_sentiment = np.full_like(mvrv_zscore, 0.5)
-<<<<<<< Updated upstream
 
-=======
-    if snp_vs_ma is None:
-        snp_vs_ma = np.zeros_like(mvrv_zscore)
-    
->>>>>>> Stashed changes
     # 1. MVRV value signal: low MVRV = buy more
     value_signal = -mvrv_zscore
 
@@ -794,7 +718,6 @@ def compute_dynamic_multiplier(
     # =========================================================================
     fgi_signal = (0.5 - fgi_sentiment) * 0.2  
 
-<<<<<<< Updated upstream
     # =========================================================================
     # [UPDATED] Combine signals with Option 2 Weights
     # 60% MVRV | 15% MA | 5% Polymarket | 20% FGI
@@ -804,25 +727,6 @@ def compute_dynamic_multiplier(
         ma_signal * 0.15 + 
         polymarket_signal * 0.05 + 
         fgi_signal * 0.20
-=======
-
-    # 7. S&P 500 Macro Signal
-    # If S&P drops below MA, snp_vs_ma is negative. Inverting it makes it a buy signal.
-    # We clip it between [-0.1, 0.1] so extreme stock market crashes don't break the bot.
-    macro_signal = -np.clip(snp_vs_ma, -0.1, 0.1)
-
-    # =========================================================================
-    # Combine signals ensuring weights sum perfectly to 1.0 (100%)
-    # 50% + 15% + 15% + 10% + 10% = 1.0
-    # =========================================================================
-    # [UPDATED] Use the dynamic weights dictionary instead of hardcoded numbers
-    combined = (
-        value_signal * weights['mvrv'] + 
-        ma_signal * weights['ma'] + 
-        fgi_signal * weights['fgi'] +
-        macro_signal * weights['snp'] + 
-        polymarket_signal * weights['poly'] 
->>>>>>> Stashed changes
     )
 
     # Apply acceleration modifier (subtle: range [0.85, 1.15])
@@ -870,10 +774,6 @@ def compute_weights_fast(
     end_date: pd.Timestamp,
     n_past: int | None = None,
     locked_weights: np.ndarray | None = None,
-<<<<<<< Updated upstream
-=======
-    weights: dict | None = None,  # <-- [NEW] Catch it here
->>>>>>> Stashed changes
 ) -> pd.Series:
     """Compute weights for a date window using precomputed features.
 
@@ -932,16 +832,6 @@ def compute_weights_fast(
     else:
         fgi_sentiment = None
 
-<<<<<<< Updated upstream
-=======
-
-    if "snp_vs_ma" in df.columns:
-        snp_vs_ma = _clean_array(df["snp_vs_ma"].values)
-    else:
-        snp_vs_ma = None
-
-
->>>>>>> Stashed changes
     # Compute dynamic weights with enhanced features
     dyn = compute_dynamic_multiplier(
         price_vs_ma,
@@ -952,11 +842,6 @@ def compute_weights_fast(
         signal_confidence,
         polymarket_sentiment,
         fgi_sentiment,  # <-- [NEW] Pass it into the multiplier here!
-<<<<<<< Updated upstream
-=======
-        snp_vs_ma, # <-- [NEW] Hand it to the brain
-	weights=weights, # <-- Pass it here
->>>>>>> Stashed changes
     )
     raw = base * dyn
 
@@ -974,10 +859,6 @@ def compute_window_weights(
     end_date: pd.Timestamp,
     current_date: pd.Timestamp,
     locked_weights: np.ndarray | None = None,
-<<<<<<< Updated upstream
-=======
-    weights: dict | None = None,  # <-- [NEW] 1. Add the parameter here
->>>>>>> Stashed changes
 ) -> pd.Series:
     """Compute weights for a date range with lock-on-compute stability.
 
@@ -1021,10 +902,6 @@ def compute_window_weights(
         n_past = 0
 
     weights = compute_weights_fast(
-<<<<<<< Updated upstream
         features_df, start_date, end_date, n_past, locked_weights
-=======
-        features_df, start_date, end_date, n_past, locked_weights, weights=weights
->>>>>>> Stashed changes
     )
     return weights.reindex(full_range, fill_value=0.0)

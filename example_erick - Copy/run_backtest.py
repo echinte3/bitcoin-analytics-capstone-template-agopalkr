@@ -6,8 +6,8 @@ from pathlib import Path
 from template.prelude_template import load_data
 from template.backtest_template import run_full_analysis
 
-# Import Example 1 model
-from example_2.model_development_example_2 import precompute_features, compute_window_weights, load_snp_data
+# Import Example_Erick model
+from example_erick.model_development_example_1 import precompute_features, compute_window_weights
 
 # Global variable to store precomputed features
 _FEATURES_DF = None
@@ -45,24 +45,15 @@ def main():
         datefmt="%Y-%m-%d %H:%M:%S",
     )
     
-    logging.info("Starting Bitcoin DCA Strategy Analysis - Example 1 (Polymarket)")
+    logging.info("Starting Bitcoin DCA Strategy Analysis - Example 1 (Polymarket + FGI Contrarian)")
     
     # 1. Load Data
     btc_df = load_data()
     
     # 2. Precompute Features (using Example 1 logic)
-    logging.info("Precomputing features (including MVRV & Polymarket)...")
+    logging.info("Precomputing features (including MVRV, Polymarket, & FGI)...")
     _FEATURES_DF = precompute_features(btc_df)
-    print('WHAT IS ', _FEATURES_DF.shape)
-
-
-    # 2a. Load SP
-    df_sp500 = load_snp_data()
-    _FEATURES_DF=pd.merge(_FEATURES_DF, df_sp500,left_index=True, right_index=True, how='left')
-    print('WHAT IS 2-->', _FEATURES_DF.shape)
-
-    #FG in
-
+    
     # 3. Define Output Directory
     base_dir = Path(__file__).parent
     output_dir = base_dir / "output"
@@ -71,10 +62,9 @@ def main():
     run_full_analysis(
         btc_df=btc_df,
         features_df=_FEATURES_DF,
-        #df_sp500=df_sp500,
         compute_weights_fn=compute_weights_wrapper,
         output_dir=output_dir,
-        strategy_label="Example 1 (Polymarket)",
+        strategy_label="Example 1 (Retail Contrarian: MVRV+MA+Poly+FGI)",
     )
 
 if __name__ == "__main__":

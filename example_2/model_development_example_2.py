@@ -298,8 +298,8 @@ def compute_mean_reversion_pressure(mvrv_zscore: np.ndarray) -> np.ndarray:
 
 
 def load_snp_data():
-    #sp_file = Path.cwd() / "data/SP500.csv"
-    sp_file = "C:/monu/georgiatech/practicum/trilemma/bitcoin/bitcoin-analytics-capstone-template/data2/SP500.csv"
+    sp_file = Path.cwd() / "data/SP500.csv"
+    #sp_file = "C:\Users\eschi\Documents\CSE 7648\bitcoin-analytics-capstone-template-agopalkr\data\SP500.csv"
     df_sp500 = pd.read_csv(sp_file)
     df_sp500['Date']=pd.to_datetime(df_sp500['Date'])
     df_sp500 = df_sp500.set_index('Date')
@@ -783,6 +783,10 @@ def compute_weights_fast(
     if n_past is None:
         n_past = n
     weights = allocate_sequential_stable(raw, n_past, locked_weights)
+<<<<<<< Updated upstream
+=======
+    #print('CHANGE HERE WEIGHTS-->', weights.head(2))
+>>>>>>> Stashed changes
 
     return pd.Series(weights, index=df.index)
 
@@ -836,7 +840,12 @@ def compute_window_weights(
     else:
         n_past = 0
 
+<<<<<<< Updated upstream
     weights = compute_weights_fast(
+=======
+    #GOPANANT
+    weights = compute_weights_fast_Orig(
+>>>>>>> Stashed changes
         features_df, start_date, end_date, n_past, locked_weights
     )
     return weights.reindex(full_range, fill_value=0.0)
