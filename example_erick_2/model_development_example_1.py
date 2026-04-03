@@ -58,7 +58,6 @@ FEATS = [
     "mvrv_volatility",
     "signal_confidence",
     "polymarket_sentiment",
-    "rsi",
 ]
 
 # =============================================================================
@@ -114,10 +113,12 @@ def load_fgi_data() -> pd.DataFrame:
         logging.error(f"Failed to process FGI data: {e}")
         return pd.DataFrame()
 
+        
 # =============================================================================
+<<<<<<< Updated upstream
+=======
 # S&P Data Loading
 # =============================================================================
-
 def load_snp_data() -> pd.DataFrame:
     """Load S&P 500 data and compute 20-day MA distance."""
     base_dir = Path(__file__).parent.parent
@@ -145,8 +146,10 @@ def load_snp_data() -> pd.DataFrame:
         return pd.DataFrame()
 
 # =============================================================================
+>>>>>>> Stashed changes
 # Model-Specific Data Loading
 # =============================================================================
+
 
 def load_polymarket_btc_sentiment() -> pd.DataFrame:
     """Load Polymarket BTC-related markets and compute daily sentiment.
@@ -229,9 +232,14 @@ def load_polymarket_btc_sentiment() -> pd.DataFrame:
     
     return daily_stats[["polymarket_sentiment"]]
 
+
 # =============================================================================
 # Helper Functions
 # =============================================================================
+
+
+# Note: softmax is not used in this model, removed to avoid duplication
+
 
 def zscore(series: pd.Series, window: int) -> pd.Series:
     """Compute rolling z-score."""
@@ -240,20 +248,22 @@ def zscore(series: pd.Series, window: int) -> pd.Series:
     return ((series - mean) / std).fillna(0)
 
 
-def compute_rsi(series: pd.Series, window: int = 14) -> pd.Series:
-    """Compute Relative Strength Index (RSI) using EMA."""
-    delta = series.diff()
-    gain = delta.where(delta > 0, 0)
-    loss = -delta.where(delta < 0, 0)
-    avg_gain = gain.ewm(alpha=1/window, adjust=False).mean()
-    avg_loss = loss.ewm(alpha=1/window, adjust=False).mean()
-    rs = avg_gain / avg_loss
-    rsi = 100 - (100 / (1 + rs))
-    return rsi.fillna(50)  # Default to neutral on NaN
-
-
 def classify_mvrv_zone(mvrv_zscore: np.ndarray) -> np.ndarray:
-    """Classify MVRV into discrete zones for regime detection."""
+    """Classify MVRV into discrete zones for regime detection.
+
+    Zones:
+    - -2 (deep_value): Z < -2.0 (historically rare, extreme buying opportunity)
+    - -1 (value): -2.0 <= Z < -1.0 (undervalued, increase buying)
+    -  0 (neutral): -1.0 <= Z < 1.5 (fair value, normal DCA)
+    - +1 (caution): 1.5 <= Z < 2.5 (overvalued, reduce buying)
+    - +2 (danger): Z >= 2.5 (extreme overvaluation, minimize buying)
+
+    Args:
+        mvrv_zscore: Array of MVRV Z-scores
+
+    Returns:
+        Array of zone classifications in [-2, -1, 0, 1, 2]
+    """
     return np.select(
         [
             mvrv_zscore < MVRV_ZONE_DEEP_VALUE,
@@ -267,8 +277,20 @@ def classify_mvrv_zone(mvrv_zscore: np.ndarray) -> np.ndarray:
 
 
 def compute_mvrv_volatility(mvrv_zscore: pd.Series, window: int) -> pd.Series:
-    """Compute rolling volatility of MVRV Z-score."""
+    """Compute rolling volatility of MVRV Z-score.
+
+    High volatility periods suggest uncertainty - signals should be dampened.
+    Low volatility periods suggest conviction - signals can be amplified.
+
+    Args:
+        mvrv_zscore: MVRV Z-score series
+        window: Rolling window for volatility calculation
+
+    Returns:
+        Normalized volatility in [0, 1] where 1 = high volatility
+    """
     vol = mvrv_zscore.rolling(window, min_periods=window // 4).std()
+    # Normalize to [0, 1] using historical quantiles
     vol_pct = vol.rolling(window * 4, min_periods=window).apply(
         lambda x: (x.iloc[-1] > x[:-1]).sum() / max(len(x) - 1, 1)
         if len(x) > 1
@@ -283,34 +305,74 @@ def compute_signal_confidence(
     mvrv_gradient: np.ndarray,
     price_vs_ma: np.ndarray,
 ) -> np.ndarray:
-    """Compute confidence score based on signal agreement."""
-    z_signal = -mvrv_zscore / 4  
-    ma_signal = -price_vs_ma  
+    """Compute confidence score based on signal agreement.
 
+    When multiple signals agree, confidence is high:
+    - Low Z-score + Rising gradient = High confidence buy
+    - High Z-score + Falling gradient = High confidence reduce
+
+    Args:
+        mvrv_zscore: MVRV Z-score in [-4, 4]
+        mvrv_gradient: Trend direction in [-1, 1]
+        price_vs_ma: Price vs MA in [-1, 1]
+
+    Returns:
+        Confidence score in [0, 1] where 1 = all signals strongly agree
+    """
+    # Normalize all signals to [-1, 1] where negative = buy signal
+    z_signal = -mvrv_zscore / 4  # Normalize to [-1, 1]
+    ma_signal = -price_vs_ma  # Below MA = buy signal
+
+    # Gradient indicates momentum direction
+    # Positive gradient with buy signals = confirmation
+    # Negative gradient with buy signals = divergence (lower confidence)
     gradient_alignment = np.where(
-        z_signal < 0,  
-        np.where(mvrv_gradient > 0, 1.0, 0.5),  
-        np.where(mvrv_gradient < 0, 1.0, 0.5),  
+        z_signal < 0,  # Buy signal from Z-score
+        np.where(mvrv_gradient > 0, 1.0, 0.5),  # Rising = confirmation
+        np.where(mvrv_gradient < 0, 1.0, 0.5),  # Falling = confirmation for sell
     )
 
+    # Calculate agreement: how many signals point the same direction?
     signals = np.stack([z_signal, ma_signal], axis=0)
     signal_std = signals.std(axis=0)
 
-    max_std = 1.0  
+    # Low std = high agreement, high std = disagreement
+    # Transform std to confidence: confidence = 1 - normalized_std
+    max_std = 1.0  # Maximum possible std when signals fully disagree
     agreement = 1.0 - np.clip(signal_std / max_std, 0, 1)
 
+    # Combine agreement with gradient alignment
     confidence = agreement * 0.7 + gradient_alignment * 0.3
+
     return np.clip(confidence, 0, 1)
 
 
 def compute_mean_reversion_pressure(mvrv_zscore: np.ndarray) -> np.ndarray:
-    """Compute mean reversion pressure based on distance from equilibrium."""
+    """Compute mean reversion pressure based on distance from equilibrium.
+
+    MVRV tends to revert to the mean. The further from equilibrium,
+    the stronger the expected reversion pressure.
+
+    Uses a sigmoid-like function to model increasing pressure at extremes.
+
+    Args:
+        mvrv_zscore: MVRV Z-score in [-4, 4]
+
+    Returns:
+        Reversion pressure in [-1, 1] where:
+        - Positive = pressure to decrease (price likely to fall)
+        - Negative = pressure to increase (price likely to rise)
+    """
+    # Sigmoid-like pressure: increases non-linearly at extremes
     pressure = np.tanh(mvrv_zscore * 0.5)
+
+    # Extra pressure at extremes (beyond ±2 std)
     extreme_pressure = np.where(
         np.abs(mvrv_zscore) > 2,
         np.sign(mvrv_zscore) * 0.3 * (np.abs(mvrv_zscore) - 2),
         0,
     )
+
     return np.clip(pressure + extreme_pressure, -1, 1)
 
 
@@ -318,8 +380,16 @@ def compute_mean_reversion_pressure(mvrv_zscore: np.ndarray) -> np.ndarray:
 # Feature Engineering
 # =============================================================================
 
+
+import logging
+import pandas as pd
+import numpy as np
+# Assuming your zscore, classify_mvrv_zone, compute_mvrv_volatility, 
+# compute_signal_confidence, load_polymarket_btc_sentiment, and load_fgi_data 
+# are imported here.
+
 def precompute_features(df: pd.DataFrame) -> pd.DataFrame:
-    """Compute MVRV, MA, RSI, and Sentiment features for weight calculation.
+    """Compute MVRV and MA features for weight calculation.
 
     Features (all lagged 1 day to prevent look-ahead bias):
     - price_vs_ma: Normalized distance from 200-day MA, clipped to [-1, 1]
@@ -328,9 +398,13 @@ def precompute_features(df: pd.DataFrame) -> pd.DataFrame:
     - mvrv_acceleration: Second derivative of MVRV gradient (momentum)
     - mvrv_zone: Discrete zone classification [-2, -1, 0, 1, 2]
     - polymarket_sentiment: Normalized sentiment from BTC market activity [0, 1]
-    - fgi_sentiment: Normalized Crypto Fear & Greed Index [0, 1]
-    - snp_vs_ma: S&P 500 normalized distance from 20-day MA
-    - rsi: Normalized Relative Strength Index [0, 1]
+    - fgi_sentiment: Normalized Crypto Fear & Greed Index [0, 1]  <-- [NEW] Added to docstring
+
+    Args:
+        df: DataFrame with price and MVRV columns
+
+    Returns:
+        DataFrame with price and computed features
     """
     if PRICE_COL not in df.columns:
         raise KeyError(f"'{PRICE_COL}' not found. Available: {list(df.columns)}")
@@ -343,31 +417,36 @@ def precompute_features(df: pd.DataFrame) -> pd.DataFrame:
     with np.errstate(divide="ignore", invalid="ignore"):
         price_vs_ma = ((price / ma) - 1).clip(-1, 1).fillna(0)
 
-    # RSI Feature
-    rsi_raw = compute_rsi(price, window=14)
-    rsi_normalized = rsi_raw / 100.0
-
     # MVRV features
     if MVRV_COL in df.columns:
         mvrv = df[MVRV_COL].loc[price.index]
+
+        # Core Z-score (365-day window)
         mvrv_z = zscore(mvrv, MVRV_ROLLING_WINDOW).clip(-4, 4)
 
+        # Smoothed gradient using EMA
         gradient_raw = mvrv_z.diff(MVRV_GRADIENT_WINDOW)
         gradient_smooth = gradient_raw.ewm(
             span=MVRV_GRADIENT_WINDOW, adjust=False
         ).mean()
         mvrv_gradient = np.tanh(gradient_smooth * 2).fillna(0)
 
+        # MVRV acceleration (second derivative - momentum detection)
         accel_raw = mvrv_gradient.diff(MVRV_ACCEL_WINDOW)
         mvrv_acceleration = accel_raw.ewm(span=MVRV_ACCEL_WINDOW, adjust=False).mean()
         mvrv_acceleration = np.tanh(mvrv_acceleration * 3).fillna(0)
 
+        # Zone classification
         mvrv_zone = pd.Series(
             classify_mvrv_zone(mvrv_z.values),
             index=mvrv_z.index,
         )
 
+        # MVRV volatility (for signal dampening in uncertain periods)
         mvrv_volatility = compute_mvrv_volatility(mvrv_z, MVRV_VOLATILITY_WINDOW)
+
+        # Signal confidence (computed after lag, using lagged values)
+        # Will be computed after lag is applied
         signal_confidence = pd.Series(0.5, index=price.index)
     else:
         mvrv_z = pd.Series(0.0, index=price.index)
@@ -377,23 +456,30 @@ def precompute_features(df: pd.DataFrame) -> pd.DataFrame:
         mvrv_volatility = pd.Series(0.5, index=price.index)
         signal_confidence = pd.Series(0.5, index=price.index)
 
-    # Load Polymarket sentiment
+    # Load Polymarket sentiment (if available)
     try:
         polymarket_df = load_polymarket_btc_sentiment()
         if not polymarket_df.empty:
+            # Merge with price index, fill missing dates with neutral (0.5)
             polymarket_sentiment = polymarket_df["polymarket_sentiment"].reindex(
                 price.index, fill_value=0.5
             )
         else:
             polymarket_sentiment = pd.Series(0.5, index=price.index)
-    except Exception as e:
+    except (ImportError, FileNotFoundError, Exception) as e:
+        # If Polymarket data not available, use neutral sentiment
         logging.warning(f"Polymarket sentiment not available: {e}")
         polymarket_sentiment = pd.Series(0.5, index=price.index)
 
-    # Load FGI Sentiment
+    # =========================================================================
+    # [NEW] Load FGI Sentiment (if available)
+    # =========================================================================
     try:
-        fgi_df = load_fgi_data()  
+        fgi_df = load_fgi_data()  # Make sure this function is imported/available
         if not fgi_df.empty:
+            # Reindex to match the price timeline. 
+            # We use ffill() to carry forward the previous day's FGI if a day is missing,
+            # then fill any remaining (like early historical data) with neutral 0.5.
             fgi_sentiment = fgi_df["fgi_normalized"].reindex(price.index).ffill().fillna(0.5)
         else:
             fgi_sentiment = pd.Series(0.5, index=price.index)
@@ -401,10 +487,15 @@ def precompute_features(df: pd.DataFrame) -> pd.DataFrame:
         logging.warning(f"FGI sentiment not available: {e}")
         fgi_sentiment = pd.Series(0.5, index=price.index)
 
-    # Load S&P 500 Macro Environment
+<<<<<<< Updated upstream
+=======
+    # =========================================================================
+    # [NEW] Load S&P 500 Macro Environment
+    # =========================================================================
     try:
         snp_df = load_snp_data()
         if not snp_df.empty:
+            # Reindex to price, forward fill weekends/holidays, fill early history with 0.0 (neutral)
             snp_vs_ma = snp_df["snp_vs_ma"].reindex(price.index).ffill().fillna(0.0)
         else:
             snp_vs_ma = pd.Series(0.0, index=price.index)
@@ -412,6 +503,8 @@ def precompute_features(df: pd.DataFrame) -> pd.DataFrame:
         logging.warning(f"S&P 500 data not available: {e}")
         snp_vs_ma = pd.Series(0.0, index=price.index)
 
+
+>>>>>>> Stashed changes
     # Build and lag features
     features = pd.DataFrame(
         {
@@ -425,9 +518,11 @@ def precompute_features(df: pd.DataFrame) -> pd.DataFrame:
             "mvrv_volatility": mvrv_volatility,
             "signal_confidence": signal_confidence,
             "polymarket_sentiment": polymarket_sentiment,
-            "fgi_sentiment": fgi_sentiment, 
-            "snp_vs_ma": snp_vs_ma,
-            "rsi": rsi_normalized,
+            "fgi_sentiment": fgi_sentiment,  # <-- [NEW] Added to the main dataframe
+<<<<<<< Updated upstream
+=======
+            "snp_vs_ma": snp_vs_ma, # <-- [NEW] Added here
+>>>>>>> Stashed changes
         },
         index=price.index,
     )
@@ -441,9 +536,11 @@ def precompute_features(df: pd.DataFrame) -> pd.DataFrame:
         "mvrv_zone",
         "mvrv_volatility",
         "polymarket_sentiment",
-        "fgi_sentiment",  
-        "snp_vs_ma", 
-        "rsi",
+        "fgi_sentiment",  # <-- [NEW] Ensures FGI is shifted by 1 day!
+<<<<<<< Updated upstream
+=======
+        "snp_vs_ma",  # <-- [NEW] Stock market data is now safely time-shifted
+>>>>>>> Stashed changes
     ]
     features[signal_cols] = features[signal_cols].shift(1)
 
@@ -451,8 +548,7 @@ def precompute_features(df: pd.DataFrame) -> pd.DataFrame:
     features["mvrv_zone"] = features["mvrv_zone"].fillna(0)
     features["mvrv_volatility"] = features["mvrv_volatility"].fillna(0.5)
     features["polymarket_sentiment"] = features["polymarket_sentiment"].fillna(0.5)
-    features["fgi_sentiment"] = features["fgi_sentiment"].fillna(0.5) 
-    features["rsi"] = features["rsi"].fillna(0.5)
+    features["fgi_sentiment"] = features["fgi_sentiment"].fillna(0.5) # <-- [NEW] Clean up NaNs from the shift
     features = features.fillna(0)
 
     # Compute signal confidence using lagged values (no look-ahead)
@@ -464,14 +560,42 @@ def precompute_features(df: pd.DataFrame) -> pd.DataFrame:
 
     return features
 
+
+# =============================================================================
+# Weight Allocation
+# =============================================================================
+
+
+# Note: _compute_stable_signal and allocate_sequential_stable are imported from template.model_development_template
+
+
 # =============================================================================
 # Dynamic Multiplier
 # =============================================================================
 
+
 def compute_asymmetric_extreme_boost(mvrv_zscore: np.ndarray) -> np.ndarray:
-    """Compute asymmetric boost for extreme MVRV values."""
+    """Compute asymmetric boost for extreme MVRV values.
+
+    Key insight: Bitcoin's MVRV is asymmetric - extreme lows are rare buying
+    opportunities, while extreme highs often precede corrections.
+
+    Behavior:
+    - Z < -2: Strong positive boost (aggressive accumulation)
+    - Z < -1: Moderate positive boost (value buying)
+    - -1 <= Z <= 1.5: No boost (neutral zone)
+    - Z > 1.5: Negative boost (reduce buying)
+    - Z > 2.5: Strong negative boost (minimize buying)
+
+    Args:
+        mvrv_zscore: Array of MVRV Z-scores in [-4, 4]
+
+    Returns:
+        Boost values (positive = increase buying, negative = reduce buying)
+    """
     boost = np.zeros_like(mvrv_zscore)
 
+    # Deep undervaluation: strong positive boost (quadratic increase)
     deep_value_mask = mvrv_zscore < MVRV_ZONE_DEEP_VALUE
     boost = np.where(
         deep_value_mask,
@@ -479,13 +603,15 @@ def compute_asymmetric_extreme_boost(mvrv_zscore: np.ndarray) -> np.ndarray:
         boost,
     )
 
+    # Moderate undervaluation: linear positive boost
     value_mask = (mvrv_zscore >= MVRV_ZONE_DEEP_VALUE) & (mvrv_zscore < MVRV_ZONE_VALUE)
     boost = np.where(
         value_mask,
-        -0.5 * mvrv_zscore,  
+        -0.5 * mvrv_zscore,  # Linear boost proportional to undervaluation
         boost,
     )
 
+    # Caution zone: moderate negative boost
     caution_mask = (mvrv_zscore >= MVRV_ZONE_CAUTION) & (mvrv_zscore < MVRV_ZONE_DANGER)
     boost = np.where(
         caution_mask,
@@ -493,6 +619,7 @@ def compute_asymmetric_extreme_boost(mvrv_zscore: np.ndarray) -> np.ndarray:
         boost,
     )
 
+    # Danger zone: strong negative boost (quadratic decrease)
     danger_mask = mvrv_zscore >= MVRV_ZONE_DANGER
     boost = np.where(
         danger_mask,
@@ -507,13 +634,27 @@ def compute_acceleration_modifier(
     mvrv_acceleration: np.ndarray,
     mvrv_gradient: np.ndarray,
 ) -> np.ndarray:
-    """Compute modifier based on MVRV acceleration (momentum)."""
+    """Compute modifier based on MVRV acceleration (momentum).
+
+    Acceleration helps identify:
+    - Momentum building in current direction
+    - Potential trend reversals
+
+    Args:
+        mvrv_acceleration: Second derivative of MVRV gradient
+        mvrv_gradient: First derivative (trend direction)
+
+    Returns:
+        Modifier in [0.5, 1.5] to scale other signals
+    """
+    # Same-direction acceleration: momentum building
+    # Opposite-direction acceleration: potential reversal
     same_direction = (mvrv_acceleration * mvrv_gradient) > 0
 
     modifier = np.where(
         same_direction,
-        1.0 + 0.3 * np.abs(mvrv_acceleration),  
-        1.0 - 0.2 * np.abs(mvrv_acceleration),  
+        1.0 + 0.3 * np.abs(mvrv_acceleration),  # Amplify if momentum building
+        1.0 - 0.2 * np.abs(mvrv_acceleration),  # Dampen if potential reversal
     )
 
     return np.clip(modifier, 0.5, 1.5)
@@ -523,20 +664,36 @@ def compute_adaptive_trend_modifier(
     mvrv_gradient: np.ndarray,
     mvrv_zscore: np.ndarray,
 ) -> np.ndarray:
-    """Compute trend modifier with adaptive thresholds."""
+    """Compute trend modifier with adaptive thresholds.
+
+    Instead of fixed 0.2/-0.2 thresholds, adapts based on current MVRV level:
+    - In deep value: be more aggressive with dip buying
+    - In overvalued territory: be more conservative
+
+    Args:
+        mvrv_gradient: MVRV trend direction in [-1, 1]
+        mvrv_zscore: Current MVRV Z-score
+
+    Returns:
+        Trend modifier for MA signal
+    """
+    # Adaptive thresholds based on MVRV level
+    # Lower threshold in value zone (more sensitive to reversals)
+    # Higher threshold in danger zone (require stronger confirmation)
     threshold = np.where(
         mvrv_zscore < -1,
-        0.1,  
-        np.where(mvrv_zscore > 1.5, 0.4, 0.2),  
+        0.1,  # Low threshold in value zone
+        np.where(mvrv_zscore > 1.5, 0.4, 0.2),  # High threshold in danger zone
     )
 
+    # Compute modifier
     modifier = np.where(
         mvrv_gradient > threshold,
-        1.0 + 0.5 * np.minimum(mvrv_gradient, 1.0),  
+        1.0 + 0.5 * np.minimum(mvrv_gradient, 1.0),  # Bull: up to 1.5x
         np.where(
             mvrv_gradient < -threshold,
-            0.3 + 0.2 * (1 + mvrv_gradient),  
-            1.0,  
+            0.3 + 0.2 * (1 + mvrv_gradient),  # Bear: down to 0.3x
+            1.0,  # Neutral
         ),
     )
 
@@ -551,17 +708,45 @@ def compute_dynamic_multiplier(
     mvrv_volatility: np.ndarray | None = None,
     signal_confidence: np.ndarray | None = None,
     polymarket_sentiment: np.ndarray | None = None,
-    fgi_sentiment: np.ndarray | None = None,
-    snp_vs_ma: np.ndarray | None = None, 
-    rsi: np.ndarray | None = None,
-    weights: dict | None = None, 
+    fgi_sentiment: np.ndarray | None = None,  # <-- [NEW] Added FGI parameter
+<<<<<<< Updated upstream
+=======
+    snp_vs_ma: np.ndarray | None = None, # <-- [NEW] Added S&P parameter
+    weights: dict | None = None,  # <-- [NEW] Add weights parameter
+>>>>>>> Stashed changes
 ) -> np.ndarray:
-    """Compute weight multiplier using newly defined weights."""
-    
-    # [NEW] Default weights configuration
-    if weights is None:
-        weights = {'mvrv': 0.48, 'ma': 0.12, 'rsi': 0.20, 'poly': 0.20, 'fgi': 0.0, 'snp': 0.0}
+    """Compute weight multiplier from MVRV, MA, and Sentiment signals.
 
+    Enhanced strategy with Retail Contrarian weighting (Option 2):
+    - Primary (60%): MVRV value signal with asymmetric extreme boost
+    - Secondary (15%): MA signal with adaptive trend modulation
+    - Tertiary (5%): Polymarket sentiment modifier (Smart Money)
+    - Quaternary (20%): FGI sentiment modifier (Retail Contrarian) <-- [NEW]
+
+    Modulated by:
+    - Signal confidence: Amplify when signals agree
+    - Volatility: Dampen in high uncertainty periods
+
+    Args:
+        price_vs_ma: Distance from 200-day MA in [-1, 1]
+        mvrv_zscore: MVRV Z-score in [-4, 4]
+        mvrv_gradient: MVRV trend direction in [-1, 1]
+        mvrv_acceleration: Optional MVRV acceleration [-1, 1]
+        mvrv_volatility: Optional volatility percentile [0, 1]
+        signal_confidence: Optional confidence score [0, 1]
+        polymarket_sentiment: Optional Polymarket sentiment [0, 1]
+        fgi_sentiment: Optional Fear & Greed Index [0, 1] <-- [NEW]
+
+    Returns:
+        Multipliers centered around 1.0
+    """
+<<<<<<< Updated upstream
+=======
+    # [NEW] Default weights if none are provided
+    if weights is None:
+        weights = {'mvrv': 0.50, 'ma': 0.15, 'fgi': 0.15, 'snp': 0.10, 'poly': 0.10}
+
+>>>>>>> Stashed changes
     # Default to neutral if not provided
     if mvrv_acceleration is None:
         mvrv_acceleration = np.zeros_like(mvrv_zscore)
@@ -571,65 +756,95 @@ def compute_dynamic_multiplier(
         signal_confidence = np.full_like(mvrv_zscore, 0.5)
     if polymarket_sentiment is None:
         polymarket_sentiment = np.full_like(mvrv_zscore, 0.5)
+    
+    # [NEW] Default FGI to neutral 0.5 (neither fear nor greed)
     if fgi_sentiment is None:
         fgi_sentiment = np.full_like(mvrv_zscore, 0.5)
+<<<<<<< Updated upstream
+
+=======
     if snp_vs_ma is None:
         snp_vs_ma = np.zeros_like(mvrv_zscore)
-    if rsi is None:
-        rsi = np.full_like(mvrv_zscore, 0.5)
     
+>>>>>>> Stashed changes
     # 1. MVRV value signal: low MVRV = buy more
     value_signal = -mvrv_zscore
+
+    # 2. Asymmetric extreme boost (corrected sign logic)
     extreme_boost = compute_asymmetric_extreme_boost(mvrv_zscore)
     value_signal = value_signal + extreme_boost
 
-    # 2. MA signal: buy when below MA, with adaptive trend modulation
+    # 3. MA signal: buy when below MA, with adaptive trend modulation
     ma_signal = -price_vs_ma
     trend_modifier = compute_adaptive_trend_modifier(mvrv_gradient, mvrv_zscore)
     ma_signal = ma_signal * trend_modifier
 
-    # 3. Polymarket sentiment signal
+    # 4. Acceleration modifier: momentum detection
+    accel_modifier = compute_acceleration_modifier(mvrv_acceleration, mvrv_gradient)
+
+    # 5. Polymarket sentiment signal (Smart Money Follower)
+    # High sentiment = slight bullish modifier. Range: [-0.1, 0.1]
     polymarket_signal = (polymarket_sentiment - 0.5) * 0.2  
 
-    # 4. FGI sentiment signal 
+    # =========================================================================
+    # [NEW] 6. FGI sentiment signal (Retail Contrarian)
+    # Notice the math is reversed: (0.5 - FGI) instead of (FGI - 0.5)
+    # If FGI is 0.0 (Extreme Fear)  -> (0.5 - 0.0) * 0.2 = +0.1 (Buy More)
+    # If FGI is 1.0 (Extreme Greed) -> (0.5 - 1.0) * 0.2 = -0.1 (Buy Less)
+    # =========================================================================
     fgi_signal = (0.5 - fgi_sentiment) * 0.2  
 
-    # 5. S&P 500 Macro Signal
+<<<<<<< Updated upstream
+    # =========================================================================
+    # [UPDATED] Combine signals with Option 2 Weights
+    # 60% MVRV | 15% MA | 5% Polymarket | 20% FGI
+    # =========================================================================
+    combined = (
+        value_signal * 0.60 + 
+        ma_signal * 0.15 + 
+        polymarket_signal * 0.05 + 
+        fgi_signal * 0.20
+=======
+
+    # 7. S&P 500 Macro Signal
+    # If S&P drops below MA, snp_vs_ma is negative. Inverting it makes it a buy signal.
+    # We clip it between [-0.1, 0.1] so extreme stock market crashes don't break the bot.
     macro_signal = -np.clip(snp_vs_ma, -0.1, 0.1)
 
-    # 6. RSI Signal (Normalized 0-1)
-    # Scaled to [-1.0, 1.0]. Lower RSI (<0.5) = buy more, Higher RSI (>0.5) = buy less.
-    rsi_signal = (0.5 - rsi) * 2.0
-
-    # Combine signals using provided explicit weights
+    # =========================================================================
+    # Combine signals ensuring weights sum perfectly to 1.0 (100%)
+    # 50% + 15% + 15% + 10% + 10% = 1.0
+    # =========================================================================
+    # [UPDATED] Use the dynamic weights dictionary instead of hardcoded numbers
     combined = (
-        value_signal * weights.get('mvrv', 0.48) + 
-        ma_signal * weights.get('ma', 0.12) + 
-        rsi_signal * weights.get('rsi', 0.20) + 
-        polymarket_signal * weights.get('poly', 0.20) +
-        fgi_signal * weights.get('fgi', 0.0) +
-        macro_signal * weights.get('snp', 0.0) 
+        value_signal * weights['mvrv'] + 
+        ma_signal * weights['ma'] + 
+        fgi_signal * weights['fgi'] +
+        macro_signal * weights['snp'] + 
+        polymarket_signal * weights['poly'] 
+>>>>>>> Stashed changes
     )
 
-    # Apply acceleration modifier
-    accel_modifier = compute_acceleration_modifier(mvrv_acceleration, mvrv_gradient)
+    # Apply acceleration modifier (subtle: range [0.85, 1.15])
     accel_modifier_subtle = 0.85 + 0.30 * (accel_modifier - 0.5) / 0.5
     accel_modifier_subtle = np.clip(accel_modifier_subtle, 0.85, 1.15)
     combined = combined * accel_modifier_subtle
 
-    # Confidence boost
+    # Confidence boost only when very high (> 0.7), otherwise neutral
+    # This prevents dampening when signals disagree
     confidence_boost = np.where(
         signal_confidence > 0.7,
-        1.0 + 0.15 * (signal_confidence - 0.7) / 0.3,
-        1.0,  
+        1.0 + 0.15 * (signal_confidence - 0.7) / 0.3,  # Up to 1.15x
+        1.0,  # Neutral otherwise
     )
     combined = combined * confidence_boost
 
-    # Volatility dampening
+    # Volatility dampening only in extreme volatility (top 20%)
+    # This prevents over-dampening in normal conditions
     volatility_dampening = np.where(
         mvrv_volatility > 0.8,
         1.0 - MVRV_VOLATILITY_DAMPENING * (mvrv_volatility - 0.8) / 0.2,
-        1.0,  
+        1.0,  # No dampening for normal volatility
     )
     combined = combined * volatility_dampening
 
@@ -645,15 +860,33 @@ def compute_dynamic_multiplier(
 # Weight Computation API
 # =============================================================================
 
+
+# Note: _clean_array is imported from template.model_development_template
+
+
 def compute_weights_fast(
     features_df: pd.DataFrame,
     start_date: pd.Timestamp,
     end_date: pd.Timestamp,
     n_past: int | None = None,
     locked_weights: np.ndarray | None = None,
-    weights: dict | None = None,  
+<<<<<<< Updated upstream
+=======
+    weights: dict | None = None,  # <-- [NEW] Catch it here
+>>>>>>> Stashed changes
 ) -> pd.Series:
-    """Compute weights for a date window using precomputed features."""
+    """Compute weights for a date window using precomputed features.
+
+    Args:
+        features_df: DataFrame from precompute_features()
+        start_date: Window start
+        end_date: Window end
+        n_past: Number of past days (for stable allocation)
+        locked_weights: Optional locked weights from database
+
+    Returns:
+        Series of weights indexed by date
+    """
     df = features_df.loc[start_date:end_date]
     if df.empty:
         return pd.Series(dtype=float)
@@ -666,6 +899,7 @@ def compute_weights_fast(
     mvrv_zscore = _clean_array(df["mvrv_zscore"].values)
     mvrv_gradient = _clean_array(df["mvrv_gradient"].values)
 
+    # Extract new features if available
     if "mvrv_acceleration" in df.columns:
         mvrv_acceleration = _clean_array(df["mvrv_acceleration"].values)
     else:
@@ -689,23 +923,25 @@ def compute_weights_fast(
     else:
         polymarket_sentiment = None
 
+    # ==========================================
+    # [NEW] Extract FGI Sentiment
+    # ==========================================
     if "fgi_sentiment" in df.columns:
         fgi_sentiment = _clean_array(df["fgi_sentiment"].values)
         fgi_sentiment = np.where(fgi_sentiment == 0, 0.5, fgi_sentiment)
     else:
         fgi_sentiment = None
 
+<<<<<<< Updated upstream
+=======
+
     if "snp_vs_ma" in df.columns:
         snp_vs_ma = _clean_array(df["snp_vs_ma"].values)
     else:
         snp_vs_ma = None
 
-    if "rsi" in df.columns:
-        rsi = _clean_array(df["rsi"].values)
-        rsi = np.where(rsi == 0, 0.5, rsi)
-    else:
-        rsi = None
 
+>>>>>>> Stashed changes
     # Compute dynamic weights with enhanced features
     dyn = compute_dynamic_multiplier(
         price_vs_ma,
@@ -715,19 +951,21 @@ def compute_weights_fast(
         mvrv_volatility,
         signal_confidence,
         polymarket_sentiment,
-        fgi_sentiment,  
-        snp_vs_ma, 
-        rsi,
-        weights=weights, 
+        fgi_sentiment,  # <-- [NEW] Pass it into the multiplier here!
+<<<<<<< Updated upstream
+=======
+        snp_vs_ma, # <-- [NEW] Hand it to the brain
+	weights=weights, # <-- Pass it here
+>>>>>>> Stashed changes
     )
     raw = base * dyn
 
     # Allocate with stability
     if n_past is None:
         n_past = n
-    computed_weights = allocate_sequential_stable(raw, n_past, locked_weights)
+    weights = allocate_sequential_stable(raw, n_past, locked_weights)
 
-    return pd.Series(computed_weights, index=df.index)
+    return pd.Series(weights, index=df.index)
 
 
 def compute_window_weights(
@@ -736,9 +974,27 @@ def compute_window_weights(
     end_date: pd.Timestamp,
     current_date: pd.Timestamp,
     locked_weights: np.ndarray | None = None,
-    weights: dict | None = None,  
+<<<<<<< Updated upstream
+=======
+    weights: dict | None = None,  # <-- [NEW] 1. Add the parameter here
+>>>>>>> Stashed changes
 ) -> pd.Series:
-    """Compute weights for a date range with lock-on-compute stability."""
+    """Compute weights for a date range with lock-on-compute stability.
+
+    Two modes:
+    1. BACKTEST (locked_weights=None): Signal-based allocation
+    2. PRODUCTION (locked_weights provided): DB-backed stability
+
+    Args:
+        features_df: DataFrame from precompute_features()
+        start_date: Investment window start
+        end_date: Investment window end
+        current_date: Current date (past/future boundary)
+        locked_weights: Optional locked weights from database
+
+    Returns:
+        Series of weights summing to 1.0
+    """
     full_range = pd.date_range(start=start_date, end=end_date, freq="D")
 
     # Extend features for future dates
@@ -755,9 +1011,6 @@ def compute_window_weights(
             placeholder["mvrv_volatility"] = 0.5
         if "signal_confidence" in placeholder.columns:
             placeholder["signal_confidence"] = 0.5
-        if "rsi" in placeholder.columns:
-            placeholder["rsi"] = 0.5
-            
         features_df = pd.concat([features_df, placeholder]).sort_index()
 
     # Determine past/future split
@@ -767,7 +1020,11 @@ def compute_window_weights(
     else:
         n_past = 0
 
-    computed_weights = compute_weights_fast(
+    weights = compute_weights_fast(
+<<<<<<< Updated upstream
+        features_df, start_date, end_date, n_past, locked_weights
+=======
         features_df, start_date, end_date, n_past, locked_weights, weights=weights
+>>>>>>> Stashed changes
     )
-    return computed_weights.reindex(full_range, fill_value=0.0)
+    return weights.reindex(full_range, fill_value=0.0)
