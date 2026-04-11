@@ -13,6 +13,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from sklearn.preprocessing import MinMaxScaler
+
 # Import base functionality from template
 from template.prelude_template import load_polymarket_data
 from template.model_development_template import (
@@ -704,6 +706,8 @@ def compute_dynamic_multiplier(
 
 # Note: _clean_array is imported from template.model_development_template
 
+
+
 import math
 def computeQty(df):
     qty=0
@@ -760,8 +764,257 @@ def computeQty(df):
     lst = lst/np.sum(lst)
     return (lst,buy_dates)
 
+def computeQtyLSTM(df, buy_pts):
+    import sys
+    lst=[]
+    #for row in df.itertuples(index=True): # index=False excludes the index from the tuple
+    #    #print(row.PriceUSD, row.MA_PriceUSD)
+    #    qty_for_day = 1e-6
+    #    #print('row',row)
+    #    if math.isnan(row.MA_PriceUSD):
+    #        #print('NAN')
+    #        lst.append(qty_for_day)
+    #        continue
+    #    lst.append(qty_for_day)
+    cnt=0
+    prev_pt = 0
+
+    map_buy_pts = dict()
+    for pt in buy_pts:
+        map_buy_pts[pt] = pt
+
+    AMT=10000
+    n=len(df)
+    dates=[]
+    #print(map_buy_pts)
+    for row in df.itertuples(index=True): # index=False excludes the index from the tuple
+        #print(row.PriceUSD, row.MA_PriceUSD)
+        qty_for_day = 1e-6
+        if cnt in map_buy_pts:
+            price = row.PriceUSD_coinmetrics
+            try:
+                qty_for_day = (cnt-prev_pt)*(AMT/n)/row.PriceUSD_coinmetrics
+            except ZeroDivisionError:
+                print('Exception', row, row.Index)
+                qty_for_day = 1e-6
+                #dates.append(row.Index)
+                ##sys.exit()
+                #continue
+            prev_pt = cnt
+        dates.append(row.Index)
+
+        cnt=cnt+1
+        lst.append(qty_for_day)
+
+    lst = lst/np.sum(lst)
+    #print('dates=',dates)
+    #sys.exit()
+    return lst
+
+
+def computeQty2(df):
+    qty=0
+    #up_days=30
+    #down_days=30
+    up_days=30
+    down_days=15
+    traded=False
+    upTrend=False
+    downTrend=False
+    i=0
+    n=len(df)
+    print('n',n)
+    cnt=0
+    lst=[]
+    AMT=10000
+    buy_dates=[]
+    for row in df.itertuples(index=True): # index=False excludes the index from the tuple
+        #print(row.PriceUSD, row.MA_PriceUSD)
+        qty_for_day = 1e-6
+        if math.isnan(row.MA_PriceUSD):
+            #print('NAN')
+            lst.append(qty_for_day)
+            continue
+        if traded==False:
+            if row.MA_PriceUSD2 > row.MA_PriceUSD:
+                qty_for_day = (up_days*(AMT/n))/row.PriceUSD_coinmetrics
+                traded=True
+                upTrend=True
+                downTrend=False
+                #print(row.Index)
+                buy_dates.append(row.Index)
+            elif row.MA_PriceUSD2 < row.MA_PriceUSD:
+                traded=True
+                downTrend=True
+                upTrend=False
+        else:
+            if upTrend == True:
+                cnt+=1
+            elif downTrend == True:
+                cnt+=1
+
+            if cnt >= up_days and upTrend:
+                upTrend = False
+                traded = False
+                cnt=0
+            if cnt >= down_days and downTrend:
+                qty_for_day = (down_days *(AMT/n))/row.PriceUSD_coinmetrics
+                downTrend=False
+                traded=False
+                cnt=0
+                buy_dates.append(row.Index)
+        lst.append(qty_for_day)
+    lst = lst/np.sum(lst)
+    return (lst,buy_dates)
+
+
+
+def compute_weights_fast_1(
+        _lstm_model,
+        features_df: pd.DataFrame,
+        start_date: pd.Timestamp,
+        end_date: pd.Timestamp,
+        n_past: int | None = None,
+        locked_weights: np.ndarray | None = None,
+
+) -> pd.Series:
+    """Compute weights for a date window using precomputed features.
+
+    Args:
+        features_df: DataFrame from precompute_features()
+        start_date: Window start
+        end_date: Window end
+        n_past: Number of past days (for stable allocation)
+        locked_weights: Optional locked weights from database
+
+    Returns:
+        Series of weights indexed by date
+    """
+
+    #global _lstm_model
+
+    print('In compute_weights_fast', _lstm_model)
+
+    df = features_df.loc[start_date:end_date].copy()
+    #window=30
+    # Very good performance
+    window=15
+    #df_small = df_btc_2025[['PriceUSD']]
+    #ma1 = df['PriceUSD'].shift().rolling(window, min_periods=window // 2).mean().to_frame()
+
+
+    # 1. Shift the data by one day (or row)
+    # This aligns the previous day's value to the current row.
+    #shifted_value = df['PriceUSD_coinmetrics'].shift(1)
+    shifted_value = df['PriceUSD_coinmetrics'].shift(3)
+
+    df['MA_PriceUSD'] = shifted_value.rolling(window=window, min_periods=window//2).mean()
+    df['MA_PriceUSD2'] = shifted_value.rolling(window=window//2, min_periods=window//4).mean()
+
+    print('CHANGE HERE df-->', df.shape)
+
+    if df.empty:
+        return pd.Series(dtype=float)
+
+    #l = computeQty(df)
+    l = computeQty2(df)
+    print('Lengh of l',len(l[0]))
+    return pd.Series(l[0], index=df.index)
+
+def create_sequences(data,  window):
+    X, y = [], []
+    for i in range(len(data) - window):
+        X.append(data[i:i + window])
+        y.append(data[i + window, 0])
+        #y.append(df.iloc[i+window]['PriceUSD'])
+    return np.array(X), np.array(y)
+
 
 def compute_weights_fast(
+        _lstm_model,
+        features_df: pd.DataFrame,
+        start_date: pd.Timestamp,
+        end_date: pd.Timestamp,
+        n_past: int | None = None,
+        locked_weights: np.ndarray | None = None,
+
+) -> pd.Series:
+    """Compute weights for a date window using precomputed features.
+
+    Args:
+        features_df: DataFrame from precompute_features()
+        start_date: Window start
+        end_date: Window end
+        n_past: Number of past days (for stable allocation)
+        locked_weights: Optional locked weights from database
+
+    Returns:
+        Series of weights indexed by date
+    """
+
+    #global _lstm_model
+
+    #print('In compute_weights_fast', _lstm_model)
+
+    df_inp = features_df.loc[start_date:end_date].copy()
+
+    if df_inp.empty:
+        return pd.Series(dtype=float)
+
+
+    df_small = df_inp[['PriceUSD_coinmetrics']].copy()
+    df_small['Momentum'] = df_small['PriceUSD_coinmetrics'].diff().copy()
+    df_small['Acceleration'] = df_small['Momentum'].diff().copy()
+    df = df_small.copy()
+    #prices = df['PriceUSD_coinmetrics'].values
+
+    # 3. Features
+    cols= ['MA5','MA20','Momentum','MomentumMA','Acceleration','Volatility']
+    df['MA5'] = df['PriceUSD_coinmetrics'].rolling(5).mean()
+    df['MA20'] = df['PriceUSD_coinmetrics'].rolling(20).mean()
+    df['MomentumMA'] = df['Momentum'].rolling(10).mean()
+    df['AccelerationMA'] = df['Acceleration'].rolling(10).mean()
+    df['Volatility'] = df['PriceUSD_coinmetrics'].rolling(10).std()
+    df_shifted=df.shift(1)[cols]
+
+    df = df_inp[['PriceUSD_coinmetrics']].join(df_shifted)
+    df = df.dropna()
+
+    scaler = MinMaxScaler()
+    scaled_data = scaler.fit_transform(df)
+    X_test, y_test = create_sequences(scaled_data, 20)
+    pred = _lstm_model.predict(X_test)
+
+    pred_inv = scaler.inverse_transform(
+        np.c_[pred, np.zeros((len(pred), df.shape[1] - 1))]
+    )[:, 0]
+
+    upTrend=False
+    downTrend=False
+    buy_pts=[]
+    for i in range(len(pred_inv)):
+        #print(i)
+        if i == 0:
+            continue
+        if pred_inv[i] > pred_inv[i-1]:
+            if downTrend == True:
+                buy_pts.append(i)
+            upTrend=True
+            downTrend=False
+        elif pred_inv[i] < pred_inv[i-1]:
+            downTrend=True
+            upTrend=False
+
+
+    #print('buy_pts:',buy_pts)
+    #l = computeQty(df)
+    l = computeQtyLSTM(df_inp, buy_pts)
+    print('Length of l',len(l))
+    return pd.Series(l, index=df_inp.index)
+
+
+
+def compute_weights_fast_forward_guessing(
         features_df: pd.DataFrame,
         start_date: pd.Timestamp,
         end_date: pd.Timestamp,
@@ -794,15 +1047,18 @@ def compute_weights_fast(
     shifted_value = df['PriceUSD_coinmetrics'].shift(3)
 
     df['MA_PriceUSD'] = shifted_value.rolling(window=window, min_periods=window//2).mean()
+    df['MA_PriceUSD2'] = shifted_value.rolling(window=window//2, min_periods=window//4).mean()
 
     print('CHANGE HERE df-->', df.shape)
 
     if df.empty:
         return pd.Series(dtype=float)
 
-    l = computeQty(df)
+    #l = computeQty(df)
+    l = computeQty2(df)
     print('Lengh of l',len(l[0]))
     return pd.Series(l[0], index=df.index)
+
 
 
 # NEED TO CHANGE THIS
@@ -894,6 +1150,7 @@ def compute_weights_fast_Orig(
 
 
 def compute_window_weights(
+    _lstm_model,
     features_df: pd.DataFrame,
     start_date: pd.Timestamp,
     end_date: pd.Timestamp,
@@ -916,6 +1173,9 @@ def compute_window_weights(
     Returns:
         Series of weights summing to 1.0
     """
+
+    #global _lstm_model
+
     print('start',start_date,'end=',end_date,'shape=',features_df.shape)
     full_range = pd.date_range(start=start_date, end=end_date, freq="D")
 
@@ -944,6 +1204,6 @@ def compute_window_weights(
 
     #GOPANANT
     weights = compute_weights_fast(
-        features_df, start_date, end_date, n_past, locked_weights
+        _lstm_model, features_df, start_date, end_date, n_past, locked_weights
     )
     return weights.reindex(full_range, fill_value=0.0)
