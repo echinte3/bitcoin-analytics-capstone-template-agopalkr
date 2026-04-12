@@ -1,19 +1,30 @@
+import os
+import random
 import logging
 import pandas as pd
 from pathlib import Path
 import numpy as np
+import tensorflow as tf
 
 # Import template components
 from template.prelude_template import load_data
 from template.backtest_template import run_full_analysis
 
 # Import Example 1 model
-from example_LSTM.model_development_example_2 import precompute_features, compute_window_weights, load_snp_data
+from example_LSTM_2.model_development_example_2 import precompute_features, compute_window_weights, load_snp_data
 
 # Global variable to store precomputed features
 _FEATURES_DF = None
-
 _lstm_model = None
+
+def set_deterministic_seeds(seed=42):
+    """Forces repeatable results across all random operations."""
+    os.environ['PYTHONHASHSEED'] = str(seed)
+    random.seed(seed)
+    np.random.seed(seed)
+    tf.random.set_seed(seed)
+    # Optional: Uncomment the line below for 100% strict determinism on GPU operations
+    # tf.config.experimental.enable_op_determinism() 
 
 #Uses global lstm_model
 def compute_weights_wrapper(df_window: pd.DataFrame) -> pd.Series:
@@ -50,23 +61,20 @@ def create_sequences(data,  window):
         #y.append(df.iloc[i+window]['PriceUSD'])
     return np.array(X), np.array(y)
 
-
 #Build the lstm model
 def lstm(df_inp):
-
     global _lstm_model
-    import numpy as np
-    import pandas as pd
+    
+    # --- ADDED: Lock the random seeds for repeatability ---
+    set_deterministic_seeds(42)
+    
     from scipy.signal import argrelextrema
     from sklearn.ensemble import RandomForestClassifier
     from sklearn.model_selection import GridSearchCV
     from sklearn.model_selection import train_test_split
     from sklearn import neighbors
-    import numpy as np
-    import pandas as pd
     from sklearn.preprocessing import MinMaxScaler
     from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
-    import tensorflow as tf
     from tensorflow import keras
     import matplotlib.pyplot as plt
 
@@ -76,7 +84,6 @@ def lstm(df_inp):
     df_small = df_btc_2018[['PriceUSD']]
     df_small['Momentum'] = df_small['PriceUSD'].diff()
     df_small['Acceleration'] = df_small['Momentum'].diff()
-
 
     df = df_small.copy()
 
@@ -121,7 +128,6 @@ def lstm(df_inp):
     _lstm_model = model
     return _lstm_model
 
-
 def main():
     global _FEATURES_DF
     
@@ -145,13 +151,10 @@ def main():
     _FEATURES_DF = precompute_features(btc_df)
     print('WHAT IS ', _FEATURES_DF.shape)
 
-
     # 2a. Load SP
     df_sp500 = load_snp_data()
     _FEATURES_DF=pd.merge(_FEATURES_DF, df_sp500,left_index=True, right_index=True, how='left')
     print('WHAT IS 2-->', _FEATURES_DF.shape)
-
-    #FG in
 
     # 3. Define Output Directory
     base_dir = Path(__file__).parent
@@ -161,7 +164,6 @@ def main():
     run_full_analysis(
         btc_df=btc_df,
         features_df=_FEATURES_DF,
-        df_sp500=df_sp500,
         compute_weights_fn=compute_weights_wrapper,
         output_dir=output_dir,
         strategy_label="Example 1 (Polymarket)",

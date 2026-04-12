@@ -767,48 +767,47 @@ def computeQty(df):
 def computeQtyLSTM(df, buy_pts):
     import sys
     lst=[]
-    #for row in df.itertuples(index=True): # index=False excludes the index from the tuple
-    #    #print(row.PriceUSD, row.MA_PriceUSD)
-    #    qty_for_day = 1e-6
-    #    #print('row',row)
-    #    if math.isnan(row.MA_PriceUSD):
-    #        #print('NAN')
-    #        lst.append(qty_for_day)
-    #        continue
-    #    lst.append(qty_for_day)
     cnt=0
-    prev_pt = 0
+    # Changed prev_pt from 0 to -1 to correctly calculate accumulated days 
+    # even if a buy point happens early on in the window.
+    prev_pt = -1
 
-    map_buy_pts = dict()
-    for pt in buy_pts:
-        map_buy_pts[pt] = pt
+    # Converted to set for O(1) lookups
+    map_buy_pts = set(buy_pts)
 
     AMT=10000
     n=len(df)
     dates=[]
-    #print(map_buy_pts)
-    for row in df.itertuples(index=True): # index=False excludes the index from the tuple
-        #print(row.PriceUSD, row.MA_PriceUSD)
+    
+    for row in df.itertuples(index=True):
         qty_for_day = 1e-6
-        if cnt in map_buy_pts:
+        is_last_day = (cnt == n - 1)
+        
+        # Trigger buy if it's a model-identified point OR if it's the last day of the window (to flush accumulated cash)
+        if cnt in map_buy_pts or is_last_day:
             price = row.PriceUSD_coinmetrics
+            days_accumulated = cnt - prev_pt
+            
             try:
-                qty_for_day = (cnt-prev_pt)*(AMT/n)/row.PriceUSD_coinmetrics
+                # Only allocate if there's actually accumulated cash to spend
+                if days_accumulated > 0:
+                    qty_for_day = days_accumulated * (AMT/n) / price
             except ZeroDivisionError:
                 print('Exception', row, row.Index)
                 qty_for_day = 1e-6
-                #dates.append(row.Index)
-                ##sys.exit()
-                #continue
+                
             prev_pt = cnt
+            
         dates.append(row.Index)
-
-        cnt=cnt+1
+        cnt += 1
         lst.append(qty_for_day)
 
-    lst = lst/np.sum(lst)
-    #print('dates=',dates)
-    #sys.exit()
+    lst = np.array(lst)
+    # Prevent potential division by zero
+    total_sum = np.sum(lst)
+    if total_sum > 0:
+        lst = lst / total_sum
+        
     return lst
 
 

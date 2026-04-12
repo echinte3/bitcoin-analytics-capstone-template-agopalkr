@@ -113,12 +113,11 @@ def load_fgi_data() -> pd.DataFrame:
         logging.error(f"Failed to process FGI data: {e}")
         return pd.DataFrame()
 
-        
+
 # =============================================================================
-<<<<<<< Updated upstream
-=======
 # S&P Data Loading
 # =============================================================================
+
 def load_snp_data() -> pd.DataFrame:
     """Load S&P 500 data and compute 20-day MA distance."""
     base_dir = Path(__file__).parent.parent
@@ -146,7 +145,6 @@ def load_snp_data() -> pd.DataFrame:
         return pd.DataFrame()
 
 # =============================================================================
->>>>>>> Stashed changes
 # Model-Specific Data Loading
 # =============================================================================
 
@@ -381,13 +379,6 @@ def compute_mean_reversion_pressure(mvrv_zscore: np.ndarray) -> np.ndarray:
 # =============================================================================
 
 
-import logging
-import pandas as pd
-import numpy as np
-# Assuming your zscore, classify_mvrv_zone, compute_mvrv_volatility, 
-# compute_signal_confidence, load_polymarket_btc_sentiment, and load_fgi_data 
-# are imported here.
-
 def precompute_features(df: pd.DataFrame) -> pd.DataFrame:
     """Compute MVRV and MA features for weight calculation.
 
@@ -487,8 +478,6 @@ def precompute_features(df: pd.DataFrame) -> pd.DataFrame:
         logging.warning(f"FGI sentiment not available: {e}")
         fgi_sentiment = pd.Series(0.5, index=price.index)
 
-<<<<<<< Updated upstream
-=======
     # =========================================================================
     # [NEW] Load S&P 500 Macro Environment
     # =========================================================================
@@ -503,8 +492,6 @@ def precompute_features(df: pd.DataFrame) -> pd.DataFrame:
         logging.warning(f"S&P 500 data not available: {e}")
         snp_vs_ma = pd.Series(0.0, index=price.index)
 
-
->>>>>>> Stashed changes
     # Build and lag features
     features = pd.DataFrame(
         {
@@ -519,10 +506,7 @@ def precompute_features(df: pd.DataFrame) -> pd.DataFrame:
             "signal_confidence": signal_confidence,
             "polymarket_sentiment": polymarket_sentiment,
             "fgi_sentiment": fgi_sentiment,  # <-- [NEW] Added to the main dataframe
-<<<<<<< Updated upstream
-=======
             "snp_vs_ma": snp_vs_ma, # <-- [NEW] Added here
->>>>>>> Stashed changes
         },
         index=price.index,
     )
@@ -537,10 +521,7 @@ def precompute_features(df: pd.DataFrame) -> pd.DataFrame:
         "mvrv_volatility",
         "polymarket_sentiment",
         "fgi_sentiment",  # <-- [NEW] Ensures FGI is shifted by 1 day!
-<<<<<<< Updated upstream
-=======
         "snp_vs_ma",  # <-- [NEW] Stock market data is now safely time-shifted
->>>>>>> Stashed changes
     ]
     features[signal_cols] = features[signal_cols].shift(1)
 
@@ -709,11 +690,8 @@ def compute_dynamic_multiplier(
     signal_confidence: np.ndarray | None = None,
     polymarket_sentiment: np.ndarray | None = None,
     fgi_sentiment: np.ndarray | None = None,  # <-- [NEW] Added FGI parameter
-<<<<<<< Updated upstream
-=======
     snp_vs_ma: np.ndarray | None = None, # <-- [NEW] Added S&P parameter
     weights: dict | None = None,  # <-- [NEW] Add weights parameter
->>>>>>> Stashed changes
 ) -> np.ndarray:
     """Compute weight multiplier from MVRV, MA, and Sentiment signals.
 
@@ -740,13 +718,10 @@ def compute_dynamic_multiplier(
     Returns:
         Multipliers centered around 1.0
     """
-<<<<<<< Updated upstream
-=======
     # [NEW] Default weights if none are provided
     if weights is None:
         weights = {'mvrv': 0.50, 'ma': 0.15, 'fgi': 0.15, 'snp': 0.10, 'poly': 0.10}
 
->>>>>>> Stashed changes
     # Default to neutral if not provided
     if mvrv_acceleration is None:
         mvrv_acceleration = np.zeros_like(mvrv_zscore)
@@ -760,13 +735,10 @@ def compute_dynamic_multiplier(
     # [NEW] Default FGI to neutral 0.5 (neither fear nor greed)
     if fgi_sentiment is None:
         fgi_sentiment = np.full_like(mvrv_zscore, 0.5)
-<<<<<<< Updated upstream
-
-=======
+    
     if snp_vs_ma is None:
         snp_vs_ma = np.zeros_like(mvrv_zscore)
     
->>>>>>> Stashed changes
     # 1. MVRV value signal: low MVRV = buy more
     value_signal = -mvrv_zscore
 
@@ -794,18 +766,6 @@ def compute_dynamic_multiplier(
     # =========================================================================
     fgi_signal = (0.5 - fgi_sentiment) * 0.2  
 
-<<<<<<< Updated upstream
-    # =========================================================================
-    # [UPDATED] Combine signals with Option 2 Weights
-    # 60% MVRV | 15% MA | 5% Polymarket | 20% FGI
-    # =========================================================================
-    combined = (
-        value_signal * 0.60 + 
-        ma_signal * 0.15 + 
-        polymarket_signal * 0.05 + 
-        fgi_signal * 0.20
-=======
-
     # 7. S&P 500 Macro Signal
     # If S&P drops below MA, snp_vs_ma is negative. Inverting it makes it a buy signal.
     # We clip it between [-0.1, 0.1] so extreme stock market crashes don't break the bot.
@@ -822,7 +782,6 @@ def compute_dynamic_multiplier(
         fgi_signal * weights['fgi'] +
         macro_signal * weights['snp'] + 
         polymarket_signal * weights['poly'] 
->>>>>>> Stashed changes
     )
 
     # Apply acceleration modifier (subtle: range [0.85, 1.15])
@@ -870,10 +829,7 @@ def compute_weights_fast(
     end_date: pd.Timestamp,
     n_past: int | None = None,
     locked_weights: np.ndarray | None = None,
-<<<<<<< Updated upstream
-=======
     weights: dict | None = None,  # <-- [NEW] Catch it here
->>>>>>> Stashed changes
 ) -> pd.Series:
     """Compute weights for a date window using precomputed features.
 
@@ -932,8 +888,6 @@ def compute_weights_fast(
     else:
         fgi_sentiment = None
 
-<<<<<<< Updated upstream
-=======
 
     if "snp_vs_ma" in df.columns:
         snp_vs_ma = _clean_array(df["snp_vs_ma"].values)
@@ -941,7 +895,6 @@ def compute_weights_fast(
         snp_vs_ma = None
 
 
->>>>>>> Stashed changes
     # Compute dynamic weights with enhanced features
     dyn = compute_dynamic_multiplier(
         price_vs_ma,
@@ -952,11 +905,8 @@ def compute_weights_fast(
         signal_confidence,
         polymarket_sentiment,
         fgi_sentiment,  # <-- [NEW] Pass it into the multiplier here!
-<<<<<<< Updated upstream
-=======
         snp_vs_ma, # <-- [NEW] Hand it to the brain
-	weights=weights, # <-- Pass it here
->>>>>>> Stashed changes
+        weights=weights, # <-- Pass it here
     )
     raw = base * dyn
 
@@ -974,10 +924,7 @@ def compute_window_weights(
     end_date: pd.Timestamp,
     current_date: pd.Timestamp,
     locked_weights: np.ndarray | None = None,
-<<<<<<< Updated upstream
-=======
     weights: dict | None = None,  # <-- [NEW] 1. Add the parameter here
->>>>>>> Stashed changes
 ) -> pd.Series:
     """Compute weights for a date range with lock-on-compute stability.
 
@@ -1021,10 +968,6 @@ def compute_window_weights(
         n_past = 0
 
     weights = compute_weights_fast(
-<<<<<<< Updated upstream
-        features_df, start_date, end_date, n_past, locked_weights
-=======
         features_df, start_date, end_date, n_past, locked_weights, weights=weights
->>>>>>> Stashed changes
     )
     return weights.reindex(full_range, fill_value=0.0)

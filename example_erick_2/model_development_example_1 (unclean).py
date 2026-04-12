@@ -13,8 +13,6 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from sklearn.preprocessing import MinMaxScaler
-
 # Import base functionality from template
 from template.prelude_template import load_polymarket_data
 from template.model_development_template import (
@@ -32,8 +30,7 @@ MVRV_COL = "CapMVRVCur"
 
 # Strategy parameters
 MIN_W = 1e-6
-#MA_WINDOW = 200  # 200-day simple moving average
-MA_WINDOW = 50
+MA_WINDOW = 200  # 200-day simple moving average
 MVRV_GRADIENT_WINDOW = 30  # Window for MVRV trend detection
 MVRV_ROLLING_WINDOW = 365  # Window for MVRV Z-score normalization
 MVRV_ACCEL_WINDOW = 14  # Window for acceleration calculation
@@ -63,8 +60,93 @@ FEATS = [
     "polymarket_sentiment",
 ]
 
+# =============================================================================
+# FGI Data Loading
+# =============================================================================
+
+def load_fgi_data() -> pd.DataFrame:
+    """Load the Crypto Fear and Greed Index (FGI) data.
+    
+    Reads the FGI CSV from the data directory, converts dates to datetime index,
+    and normalizes the 0-100 score to a 0.0-1.0 scale for easier signal blending.
+    
+    Returns:
+        DataFrame indexed by date containing 'value', 'value_classification', 
+        and 'fgi_normalized'. Returns an empty DataFrame if file is not found.
+    """
+    # Resolve the path exactly like the polymarket function
+    base_dir = Path(__file__).parent.parent
+    file_path = base_dir / "data" / "crypto_fear_and_greed_index_2019_2025.csv"
+    
+    if not file_path.exists():
+        logging.warning(
+            f"FGI data file not found at {file_path}. "
+            "FGI signal will default to neutral."
+        )
+        return pd.DataFrame()
+        
+    try:
+        # Load the CSV
+        df = pd.read_csv(file_path)
+        
+        # Convert the 'date' column to proper datetime objects and remove any time data
+        df["date"] = pd.to_datetime(df["date"]).dt.normalize()
+        
+        # Ensure 'value' is numeric (coercing any weird string errors to NaN)
+        df["value"] = pd.to_numeric(df["value"], errors="coerce")
+        
+        # Normalize the 0-100 score to 0.0-1.0 for the multiplier math
+        df["fgi_normalized"] = df["value"] / 100.0
+        
+        # Set the date as the index and sort chronologically
+        df = df.set_index("date").sort_index()
+        
+        logging.info(
+            f"FGI data loaded: {len(df)} days, "
+            f"from {df.index.min().date()} to {df.index.max().date()}"
+        )
+        
+        # Return only the relevant columns
+        return df[["value", "fgi_normalized", "value_classification"]]
+        
+    except Exception as e:
+        logging.error(f"Failed to process FGI data: {e}")
+        return pd.DataFrame()
+
+        
+# =============================================================================
+<<<<<<< Updated upstream
+=======
+# S&P Data Loading
+# =============================================================================
+def load_snp_data() -> pd.DataFrame:
+    """Load S&P 500 data and compute 20-day MA distance."""
+    base_dir = Path(__file__).parent.parent
+    file_path = base_dir / "data" / "SP500.csv"
+    
+    if not file_path.exists():
+        logging.warning("S&P 500 data not found. Macro signal will default to neutral.")
+        return pd.DataFrame()
+        
+    try:
+        df = pd.read_csv(file_path)
+        df['Date'] = pd.to_datetime(df['Date']).dt.normalize()
+        df = df.set_index('Date').sort_index()
+        
+        # Calculate 20-day MA
+        df['snp_ma'] = df['Close'].rolling(20, min_periods=10).mean()
+        
+        # Calculate distance from MA (Positive = Uptrend, Negative = Downtrend)
+        df['snp_vs_ma'] = (df['Close'] / df['snp_ma']) - 1.0
+        
+        return df[['Close', 'snp_ma', 'snp_vs_ma']]
+        
+    except Exception as e:
+        logging.error(f"Failed to process S&P 500 data: {e}")
+        return pd.DataFrame()
 
 # =============================================================================
+>>>>>>> Stashed changes
 # Model-Specific Data Loading
 # =============================================================================
 
@@ -299,18 +381,12 @@ def compute_mean_reversion_pressure(mvrv_zscore: np.ndarray) -> np.ndarray:
 # =============================================================================
 
 
-def load_snp_data():
-    sp_file = Path.cwd() / "data/SP500.csv"
-    #sp_file = "C:/monu/georgiatech/practicum/trilemma/bitcoin/bitcoin-analytics-capstone-template/data2/SP500.csv"
-    df_sp500 = pd.read_csv(sp_file)
-    df_sp500['Date']=pd.to_datetime(df_sp500['Date'])
-    df_sp500 = df_sp500.set_index('Date')
-    df_sp500.index = df_sp500.index.normalize()
-    roll_mean=df_sp500['Close'].rolling(20).mean().dropna().to_frame()
-    df_sp500=pd.merge(df_sp500, roll_mean,left_index=True, right_index=True)
-    df_sp500=df_sp500.rename(columns={"Close_x": "Close", "Close_y": "MA"})
-    print(df_sp500.head(2))
-    return df_sp500
+import logging
+import pandas as pd
+import numpy as np
+# Assuming your zscore, classify_mvrv_zone, compute_mvrv_volatility, 
+# compute_signal_confidence, load_polymarket_btc_sentiment, and load_fgi_data 
+# are imported here.
 
 def precompute_features(df: pd.DataFrame) -> pd.DataFrame:
     """Compute MVRV and MA features for weight calculation.
@@ -322,6 +398,7 @@ def precompute_features(df: pd.DataFrame) -> pd.DataFrame:
     - mvrv_acceleration: Second derivative of MVRV gradient (momentum)
     - mvrv_zone: Discrete zone classification [-2, -1, 0, 1, 2]
     - polymarket_sentiment: Normalized sentiment from BTC market activity [0, 1]
+    - fgi_sentiment: Normalized Crypto Fear & Greed Index [0, 1]  <-- [NEW] Added to docstring
 
     Args:
         df: DataFrame with price and MVRV columns
@@ -394,6 +471,40 @@ def precompute_features(df: pd.DataFrame) -> pd.DataFrame:
         logging.warning(f"Polymarket sentiment not available: {e}")
         polymarket_sentiment = pd.Series(0.5, index=price.index)
 
+    # =========================================================================
+    # [NEW] Load FGI Sentiment (if available)
+    # =========================================================================
+    try:
+        fgi_df = load_fgi_data()  # Make sure this function is imported/available
+        if not fgi_df.empty:
+            # Reindex to match the price timeline. 
+            # We use ffill() to carry forward the previous day's FGI if a day is missing,
+            # then fill any remaining (like early historical data) with neutral 0.5.
+            fgi_sentiment = fgi_df["fgi_normalized"].reindex(price.index).ffill().fillna(0.5)
+        else:
+            fgi_sentiment = pd.Series(0.5, index=price.index)
+    except Exception as e:
+        logging.warning(f"FGI sentiment not available: {e}")
+        fgi_sentiment = pd.Series(0.5, index=price.index)
+
+<<<<<<< Updated upstream
+=======
+    # =========================================================================
+    # [NEW] Load S&P 500 Macro Environment
+    # =========================================================================
+    try:
+        snp_df = load_snp_data()
+        if not snp_df.empty:
+            # Reindex to price, forward fill weekends/holidays, fill early history with 0.0 (neutral)
+            snp_vs_ma = snp_df["snp_vs_ma"].reindex(price.index).ffill().fillna(0.0)
+        else:
+            snp_vs_ma = pd.Series(0.0, index=price.index)
+    except Exception as e:
+        logging.warning(f"S&P 500 data not available: {e}")
+        snp_vs_ma = pd.Series(0.0, index=price.index)
+
+
+>>>>>>> Stashed changes
     # Build and lag features
     features = pd.DataFrame(
         {
@@ -407,6 +518,11 @@ def precompute_features(df: pd.DataFrame) -> pd.DataFrame:
             "mvrv_volatility": mvrv_volatility,
             "signal_confidence": signal_confidence,
             "polymarket_sentiment": polymarket_sentiment,
+            "fgi_sentiment": fgi_sentiment,  # <-- [NEW] Added to the main dataframe
+<<<<<<< Updated upstream
+=======
+            "snp_vs_ma": snp_vs_ma, # <-- [NEW] Added here
+>>>>>>> Stashed changes
         },
         index=price.index,
     )
@@ -420,6 +536,11 @@ def precompute_features(df: pd.DataFrame) -> pd.DataFrame:
         "mvrv_zone",
         "mvrv_volatility",
         "polymarket_sentiment",
+        "fgi_sentiment",  # <-- [NEW] Ensures FGI is shifted by 1 day!
+<<<<<<< Updated upstream
+=======
+        "snp_vs_ma",  # <-- [NEW] Stock market data is now safely time-shifted
+>>>>>>> Stashed changes
     ]
     features[signal_cols] = features[signal_cols].shift(1)
 
@@ -427,6 +548,7 @@ def precompute_features(df: pd.DataFrame) -> pd.DataFrame:
     features["mvrv_zone"] = features["mvrv_zone"].fillna(0)
     features["mvrv_volatility"] = features["mvrv_volatility"].fillna(0.5)
     features["polymarket_sentiment"] = features["polymarket_sentiment"].fillna(0.5)
+    features["fgi_sentiment"] = features["fgi_sentiment"].fillna(0.5) # <-- [NEW] Clean up NaNs from the shift
     features = features.fillna(0)
 
     # Compute signal confidence using lagged values (no look-ahead)
@@ -586,16 +708,20 @@ def compute_dynamic_multiplier(
     mvrv_volatility: np.ndarray | None = None,
     signal_confidence: np.ndarray | None = None,
     polymarket_sentiment: np.ndarray | None = None,
-    sp500_price: np.ndarray | None = None,
-    ma500_price: np.ndarray | None = None,
-
+    fgi_sentiment: np.ndarray | None = None,  # <-- [NEW] Added FGI parameter
+<<<<<<< Updated upstream
+=======
+    snp_vs_ma: np.ndarray | None = None, # <-- [NEW] Added S&P parameter
+    weights: dict | None = None,  # <-- [NEW] Add weights parameter
+>>>>>>> Stashed changes
 ) -> np.ndarray:
-    """Compute weight multiplier from MVRV and MA signals.
+    """Compute weight multiplier from MVRV, MA, and Sentiment signals.
 
-    Enhanced strategy with multiple MVRV signals:
-    - Primary (64%): MVRV value signal with asymmetric extreme boost
-    - Secondary (16%): MA signal with adaptive trend modulation
-    - Tertiary (20%): Polymarket sentiment modifier
+    Enhanced strategy with Retail Contrarian weighting (Option 2):
+    - Primary (60%): MVRV value signal with asymmetric extreme boost
+    - Secondary (15%): MA signal with adaptive trend modulation
+    - Tertiary (5%): Polymarket sentiment modifier (Smart Money)
+    - Quaternary (20%): FGI sentiment modifier (Retail Contrarian) <-- [NEW]
 
     Modulated by:
     - Signal confidence: Amplify when signals agree
@@ -609,10 +735,18 @@ def compute_dynamic_multiplier(
         mvrv_volatility: Optional volatility percentile [0, 1]
         signal_confidence: Optional confidence score [0, 1]
         polymarket_sentiment: Optional Polymarket sentiment [0, 1]
+        fgi_sentiment: Optional Fear & Greed Index [0, 1] <-- [NEW]
 
     Returns:
         Multipliers centered around 1.0
     """
+<<<<<<< Updated upstream
+=======
+    # [NEW] Default weights if none are provided
+    if weights is None:
+        weights = {'mvrv': 0.50, 'ma': 0.15, 'fgi': 0.15, 'snp': 0.10, 'poly': 0.10}
+
+>>>>>>> Stashed changes
     # Default to neutral if not provided
     if mvrv_acceleration is None:
         mvrv_acceleration = np.zeros_like(mvrv_zscore)
@@ -622,7 +756,17 @@ def compute_dynamic_multiplier(
         signal_confidence = np.full_like(mvrv_zscore, 0.5)
     if polymarket_sentiment is None:
         polymarket_sentiment = np.full_like(mvrv_zscore, 0.5)
+    
+    # [NEW] Default FGI to neutral 0.5 (neither fear nor greed)
+    if fgi_sentiment is None:
+        fgi_sentiment = np.full_like(mvrv_zscore, 0.5)
+<<<<<<< Updated upstream
 
+=======
+    if snp_vs_ma is None:
+        snp_vs_ma = np.zeros_like(mvrv_zscore)
+    
+>>>>>>> Stashed changes
     # 1. MVRV value signal: low MVRV = buy more
     value_signal = -mvrv_zscore
 
@@ -638,26 +782,48 @@ def compute_dynamic_multiplier(
     # 4. Acceleration modifier: momentum detection
     accel_modifier = compute_acceleration_modifier(mvrv_acceleration, mvrv_gradient)
 
-    # 5. Polymarket sentiment signal: high sentiment = slight bullish modifier
-    # Normalize from [0, 1] to [-0.1, 0.1] for subtle effect
-    polymarket_signal = (polymarket_sentiment - 0.5) * 0.2  # Range: [-0.1, 0.1]
+    # 5. Polymarket sentiment signal (Smart Money Follower)
+    # High sentiment = slight bullish modifier. Range: [-0.1, 0.1]
+    polymarket_signal = (polymarket_sentiment - 0.5) * 0.2  
 
-    # Combine signals with weights
-    # Primary: MVRV value (64%), Secondary: MA (16%), Tertiary: Polymarket (20%)
-    # Focus on core MVRV signal with asymmetric boost
-    # combined = value_signal * 0.64 + ma_signal * 0.16 + polymarket_signal * 0.20
-    arr = ma500_price/sp500_price
-    arr[np.isnan(arr)] = 1
-    # 60%
-    #combined = value_signal * 0.30 + ma_signal * 0.1 + polymarket_signal * 0.10 + arr * 0.6
-    # also arund 60%
-    #combined = value_signal * 0.40 + ma_signal * 0.05 + polymarket_signal * 0.05 + arr * 0.5
+    # =========================================================================
+    # [NEW] 6. FGI sentiment signal (Retail Contrarian)
+    # Notice the math is reversed: (0.5 - FGI) instead of (FGI - 0.5)
+    # If FGI is 0.0 (Extreme Fear)  -> (0.5 - 0.0) * 0.2 = +0.1 (Buy More)
+    # If FGI is 1.0 (Extreme Greed) -> (0.5 - 1.0) * 0.2 = -0.1 (Buy Less)
+    # =========================================================================
+    fgi_signal = (0.5 - fgi_sentiment) * 0.2  
 
-    #Not ok
-    #combined = value_signal * 0.15 + ma_signal * 0.08 + polymarket_signal * 0.02 + arr * 0.75
+<<<<<<< Updated upstream
+    # =========================================================================
+    # [UPDATED] Combine signals with Option 2 Weights
+    # 60% MVRV | 15% MA | 5% Polymarket | 20% FGI
+    # =========================================================================
+    combined = (
+        value_signal * 0.60 + 
+        ma_signal * 0.15 + 
+        polymarket_signal * 0.05 + 
+        fgi_signal * 0.20
+=======
 
-    #Not much diff
-    combined = (arr**0.5)*(value_signal * 0.80 + ma_signal * 0.20) + (1-arr*0.5)*polymarket_signal * 0.20
+    # 7. S&P 500 Macro Signal
+    # If S&P drops below MA, snp_vs_ma is negative. Inverting it makes it a buy signal.
+    # We clip it between [-0.1, 0.1] so extreme stock market crashes don't break the bot.
+    macro_signal = -np.clip(snp_vs_ma, -0.1, 0.1)
+
+    # =========================================================================
+    # Combine signals ensuring weights sum perfectly to 1.0 (100%)
+    # 50% + 15% + 15% + 10% + 10% = 1.0
+    # =========================================================================
+    # [UPDATED] Use the dynamic weights dictionary instead of hardcoded numbers
+    combined = (
+        value_signal * weights['mvrv'] + 
+        ma_signal * weights['ma'] + 
+        fgi_signal * weights['fgi'] +
+        macro_signal * weights['snp'] + 
+        polymarket_signal * weights['poly'] 
+>>>>>>> Stashed changes
+    )
 
     # Apply acceleration modifier (subtle: range [0.85, 1.15])
     accel_modifier_subtle = 0.85 + 0.30 * (accel_modifier - 0.5) / 0.5
@@ -681,21 +847,12 @@ def compute_dynamic_multiplier(
         1.0,  # No dampening for normal volatility
     )
     combined = combined * volatility_dampening
-    arr = ma500_price/sp500_price
-    arr[np.isnan(arr)] = 0
-
-    #combined = combined * (arr)**0.8
-    #print('RATIO-->',arr)
-    #combined = combined * (sp500_price/ma500_price)**1
 
     # Scale and clip
     adjustment = combined * DYNAMIC_STRENGTH
     adjustment = np.clip(adjustment, -5, 100)
 
     multiplier = np.exp(adjustment)
-
-    multiplier = multiplier * arr
-
     return np.where(np.isfinite(multiplier), multiplier, 1.0)
 
 
@@ -707,368 +864,16 @@ def compute_dynamic_multiplier(
 # Note: _clean_array is imported from template.model_development_template
 
 
-
-import math
-def computeQty(df):
-    qty=0
-    #up_days=30
-    #down_days=30
-    up_days=30
-    down_days=15
-    traded=False
-    upTrend=False
-    downTrend=False
-    i=0
-    n=len(df)
-    print('n',n)
-    cnt=0
-    lst=[]
-    AMT=10000
-    buy_dates=[]
-    for row in df.itertuples(index=True): # index=False excludes the index from the tuple
-        #print(row.PriceUSD, row.MA_PriceUSD)
-        qty_for_day = 1e-6
-        if math.isnan(row.MA_PriceUSD):
-            #print('NAN')
-            lst.append(qty_for_day)
-            continue
-        if traded==False:
-            if row.PriceUSD_coinmetrics > row.MA_PriceUSD:
-                qty_for_day = (up_days*(AMT/n))/row.PriceUSD_coinmetrics
-                traded=True
-                upTrend=True
-                downTrend=False
-                #print(row.Index)
-                buy_dates.append(row.Index)
-            elif row.PriceUSD_coinmetrics < row.MA_PriceUSD:
-                traded=True
-                downTrend=True
-                upTrend=False
-        else:
-            if upTrend == True:
-                cnt+=1
-            elif downTrend == True:
-                cnt+=1
-
-            if cnt >= up_days and upTrend:
-                upTrend = False
-                traded = False
-                cnt=0
-            if cnt >= down_days and downTrend:
-                qty_for_day = (down_days *(AMT/n))/row.PriceUSD_coinmetrics
-                downTrend=False
-                traded=False
-                cnt=0
-                buy_dates.append(row.Index)
-        lst.append(qty_for_day)
-    lst = lst/np.sum(lst)
-    return (lst,buy_dates)
-
-def computeQtyLSTM(df, buy_pts):
-    import sys
-    lst=[]
-    #for row in df.itertuples(index=True): # index=False excludes the index from the tuple
-    #    #print(row.PriceUSD, row.MA_PriceUSD)
-    #    qty_for_day = 1e-6
-    #    #print('row',row)
-    #    if math.isnan(row.MA_PriceUSD):
-    #        #print('NAN')
-    #        lst.append(qty_for_day)
-    #        continue
-    #    lst.append(qty_for_day)
-    cnt=0
-    prev_pt = 0
-
-    map_buy_pts = dict()
-    for pt in buy_pts:
-        map_buy_pts[pt] = pt
-
-    AMT=10000
-    n=len(df)
-    dates=[]
-    #print(map_buy_pts)
-    for row in df.itertuples(index=True): # index=False excludes the index from the tuple
-        #print(row.PriceUSD, row.MA_PriceUSD)
-        qty_for_day = 1e-6
-        if cnt in map_buy_pts:
-            price = row.PriceUSD_coinmetrics
-            try:
-                qty_for_day = (cnt-prev_pt)*(AMT/n)/row.PriceUSD_coinmetrics
-            except ZeroDivisionError:
-                print('Exception', row, row.Index)
-                qty_for_day = 1e-6
-                #dates.append(row.Index)
-                ##sys.exit()
-                #continue
-            prev_pt = cnt
-        dates.append(row.Index)
-
-        cnt=cnt+1
-        lst.append(qty_for_day)
-
-    lst = lst/np.sum(lst)
-    #print('dates=',dates)
-    #sys.exit()
-    return lst
-
-
-def computeQty2(df):
-    qty=0
-    #up_days=30
-    #down_days=30
-    up_days=30
-    down_days=15
-    traded=False
-    upTrend=False
-    downTrend=False
-    i=0
-    n=len(df)
-    print('n',n)
-    cnt=0
-    lst=[]
-    AMT=10000
-    buy_dates=[]
-    for row in df.itertuples(index=True): # index=False excludes the index from the tuple
-        #print(row.PriceUSD, row.MA_PriceUSD)
-        qty_for_day = 1e-6
-        if math.isnan(row.MA_PriceUSD):
-            #print('NAN')
-            lst.append(qty_for_day)
-            continue
-        if traded==False:
-            if row.MA_PriceUSD2 > row.MA_PriceUSD:
-                qty_for_day = (up_days*(AMT/n))/row.PriceUSD_coinmetrics
-                traded=True
-                upTrend=True
-                downTrend=False
-                #print(row.Index)
-                buy_dates.append(row.Index)
-            elif row.MA_PriceUSD2 < row.MA_PriceUSD:
-                traded=True
-                downTrend=True
-                upTrend=False
-        else:
-            if upTrend == True:
-                cnt+=1
-            elif downTrend == True:
-                cnt+=1
-
-            if cnt >= up_days and upTrend:
-                upTrend = False
-                traded = False
-                cnt=0
-            if cnt >= down_days and downTrend:
-                qty_for_day = (down_days *(AMT/n))/row.PriceUSD_coinmetrics
-                downTrend=False
-                traded=False
-                cnt=0
-                buy_dates.append(row.Index)
-        lst.append(qty_for_day)
-    lst = lst/np.sum(lst)
-    return (lst,buy_dates)
-
-
-
-def compute_weights_fast_1(
-        _lstm_model,
-        features_df: pd.DataFrame,
-        start_date: pd.Timestamp,
-        end_date: pd.Timestamp,
-        n_past: int | None = None,
-        locked_weights: np.ndarray | None = None,
-
-) -> pd.Series:
-    """Compute weights for a date window using precomputed features.
-
-    Args:
-        features_df: DataFrame from precompute_features()
-        start_date: Window start
-        end_date: Window end
-        n_past: Number of past days (for stable allocation)
-        locked_weights: Optional locked weights from database
-
-    Returns:
-        Series of weights indexed by date
-    """
-
-    #global _lstm_model
-
-    print('In compute_weights_fast', _lstm_model)
-
-    df = features_df.loc[start_date:end_date].copy()
-    #window=30
-    # Very good performance
-    window=15
-    #df_small = df_btc_2025[['PriceUSD']]
-    #ma1 = df['PriceUSD'].shift().rolling(window, min_periods=window // 2).mean().to_frame()
-
-
-    # 1. Shift the data by one day (or row)
-    # This aligns the previous day's value to the current row.
-    #shifted_value = df['PriceUSD_coinmetrics'].shift(1)
-    shifted_value = df['PriceUSD_coinmetrics'].shift(3)
-
-    df['MA_PriceUSD'] = shifted_value.rolling(window=window, min_periods=window//2).mean()
-    df['MA_PriceUSD2'] = shifted_value.rolling(window=window//2, min_periods=window//4).mean()
-
-    print('CHANGE HERE df-->', df.shape)
-
-    if df.empty:
-        return pd.Series(dtype=float)
-
-    #l = computeQty(df)
-    l = computeQty2(df)
-    print('Lengh of l',len(l[0]))
-    return pd.Series(l[0], index=df.index)
-
-def create_sequences(data,  window):
-    X, y = [], []
-    for i in range(len(data) - window):
-        X.append(data[i:i + window])
-        y.append(data[i + window, 0])
-        #y.append(df.iloc[i+window]['PriceUSD'])
-    return np.array(X), np.array(y)
-
-
 def compute_weights_fast(
-        _lstm_model,
-        features_df: pd.DataFrame,
-        start_date: pd.Timestamp,
-        end_date: pd.Timestamp,
-        n_past: int | None = None,
-        locked_weights: np.ndarray | None = None,
-
-) -> pd.Series:
-    """Compute weights for a date window using precomputed features.
-
-    Args:
-        features_df: DataFrame from precompute_features()
-        start_date: Window start
-        end_date: Window end
-        n_past: Number of past days (for stable allocation)
-        locked_weights: Optional locked weights from database
-
-    Returns:
-        Series of weights indexed by date
-    """
-
-    #global _lstm_model
-
-    #print('In compute_weights_fast', _lstm_model)
-
-    df_inp = features_df.loc[start_date:end_date].copy()
-
-    if df_inp.empty:
-        return pd.Series(dtype=float)
-
-
-    df_small = df_inp[['PriceUSD_coinmetrics']].copy()
-    df_small['Momentum'] = df_small['PriceUSD_coinmetrics'].diff().copy()
-    df_small['Acceleration'] = df_small['Momentum'].diff().copy()
-    df = df_small.copy()
-    #prices = df['PriceUSD_coinmetrics'].values
-
-    # 3. Features
-    cols= ['MA5','MA20','Momentum','MomentumMA','Acceleration','Volatility']
-    df['MA5'] = df['PriceUSD_coinmetrics'].rolling(5).mean()
-    df['MA20'] = df['PriceUSD_coinmetrics'].rolling(20).mean()
-    df['MomentumMA'] = df['Momentum'].rolling(10).mean()
-    df['AccelerationMA'] = df['Acceleration'].rolling(10).mean()
-    df['Volatility'] = df['PriceUSD_coinmetrics'].rolling(10).std()
-    df_shifted=df.shift(1)[cols]
-
-    df = df_inp[['PriceUSD_coinmetrics']].join(df_shifted)
-    df = df.dropna()
-
-    scaler = MinMaxScaler()
-    scaled_data = scaler.fit_transform(df)
-    X_test, y_test = create_sequences(scaled_data, 20)
-    pred = _lstm_model.predict(X_test)
-
-    pred_inv = scaler.inverse_transform(
-        np.c_[pred, np.zeros((len(pred), df.shape[1] - 1))]
-    )[:, 0]
-
-    upTrend=False
-    downTrend=False
-    buy_pts=[]
-    for i in range(len(pred_inv)):
-        #print(i)
-        if i == 0:
-            continue
-        if pred_inv[i] > pred_inv[i-1]:
-            if downTrend == True:
-                buy_pts.append(i)
-            upTrend=True
-            downTrend=False
-        elif pred_inv[i] < pred_inv[i-1]:
-            downTrend=True
-            upTrend=False
-
-
-    #print('buy_pts:',buy_pts)
-    #l = computeQty(df)
-    l = computeQtyLSTM(df_inp, buy_pts)
-    print('Length of l',len(l))
-    return pd.Series(l, index=df_inp.index)
-
-
-
-def compute_weights_fast_forward_guessing(
-        features_df: pd.DataFrame,
-        start_date: pd.Timestamp,
-        end_date: pd.Timestamp,
-        n_past: int | None = None,
-        locked_weights: np.ndarray | None = None,
-) -> pd.Series:
-    """Compute weights for a date window using precomputed features.
-
-    Args:
-        features_df: DataFrame from precompute_features()
-        start_date: Window start
-        end_date: Window end
-        n_past: Number of past days (for stable allocation)
-        locked_weights: Optional locked weights from database
-
-    Returns:
-        Series of weights indexed by date
-    """
-    df = features_df.loc[start_date:end_date].copy()
-    #window=30
-    # Very good performance
-    window=15
-    #df_small = df_btc_2025[['PriceUSD']]
-    #ma1 = df['PriceUSD'].shift().rolling(window, min_periods=window // 2).mean().to_frame()
-
-
-    # 1. Shift the data by one day (or row)
-    # This aligns the previous day's value to the current row.
-    #shifted_value = df['PriceUSD_coinmetrics'].shift(1)
-    shifted_value = df['PriceUSD_coinmetrics'].shift(3)
-
-    df['MA_PriceUSD'] = shifted_value.rolling(window=window, min_periods=window//2).mean()
-    df['MA_PriceUSD2'] = shifted_value.rolling(window=window//2, min_periods=window//4).mean()
-
-    print('CHANGE HERE df-->', df.shape)
-
-    if df.empty:
-        return pd.Series(dtype=float)
-
-    #l = computeQty(df)
-    l = computeQty2(df)
-    print('Lengh of l',len(l[0]))
-    return pd.Series(l[0], index=df.index)
-
-
-
-# NEED TO CHANGE THIS
-# CHANGE THIS TO RETURN NEW LOGIC
-def compute_weights_fast_Orig(
     features_df: pd.DataFrame,
     start_date: pd.Timestamp,
     end_date: pd.Timestamp,
     n_past: int | None = None,
     locked_weights: np.ndarray | None = None,
+<<<<<<< Updated upstream
+=======
+    weights: dict | None = None,  # <-- [NEW] Catch it here
+>>>>>>> Stashed changes
 ) -> pd.Series:
     """Compute weights for a date window using precomputed features.
 
@@ -1083,8 +888,6 @@ def compute_weights_fast_Orig(
         Series of weights indexed by date
     """
     df = features_df.loc[start_date:end_date]
-    print('CHANGE HERE df-->', df.shape)
-
     if df.empty:
         return pd.Series(dtype=float)
 
@@ -1120,9 +923,25 @@ def compute_weights_fast_Orig(
     else:
         polymarket_sentiment = None
 
-    sp500_price = _clean_array(df["Close"].values)
-    ma500_price = _clean_array(df["MA"].values)
+    # ==========================================
+    # [NEW] Extract FGI Sentiment
+    # ==========================================
+    if "fgi_sentiment" in df.columns:
+        fgi_sentiment = _clean_array(df["fgi_sentiment"].values)
+        fgi_sentiment = np.where(fgi_sentiment == 0, 0.5, fgi_sentiment)
+    else:
+        fgi_sentiment = None
 
+<<<<<<< Updated upstream
+=======
+
+    if "snp_vs_ma" in df.columns:
+        snp_vs_ma = _clean_array(df["snp_vs_ma"].values)
+    else:
+        snp_vs_ma = None
+
+
+>>>>>>> Stashed changes
     # Compute dynamic weights with enhanced features
     dyn = compute_dynamic_multiplier(
         price_vs_ma,
@@ -1132,30 +951,33 @@ def compute_weights_fast_Orig(
         mvrv_volatility,
         signal_confidence,
         polymarket_sentiment,
-        sp500_price,
-        ma500_price,
+        fgi_sentiment,  # <-- [NEW] Pass it into the multiplier here!
+<<<<<<< Updated upstream
+=======
+        snp_vs_ma, # <-- [NEW] Hand it to the brain
+	weights=weights, # <-- Pass it here
+>>>>>>> Stashed changes
     )
     raw = base * dyn
-
-
-    #print('MY METHOD 2 ---->', raw.shape)
 
     # Allocate with stability
     if n_past is None:
         n_past = n
     weights = allocate_sequential_stable(raw, n_past, locked_weights)
-    print('CHANGE HERE WEIGHTS-->', weights.head(2))
 
     return pd.Series(weights, index=df.index)
 
 
 def compute_window_weights(
-    _lstm_model,
     features_df: pd.DataFrame,
     start_date: pd.Timestamp,
     end_date: pd.Timestamp,
     current_date: pd.Timestamp,
     locked_weights: np.ndarray | None = None,
+<<<<<<< Updated upstream
+=======
+    weights: dict | None = None,  # <-- [NEW] 1. Add the parameter here
+>>>>>>> Stashed changes
 ) -> pd.Series:
     """Compute weights for a date range with lock-on-compute stability.
 
@@ -1173,10 +995,6 @@ def compute_window_weights(
     Returns:
         Series of weights summing to 1.0
     """
-
-    #global _lstm_model
-
-    print('start',start_date,'end=',end_date,'shape=',features_df.shape)
     full_range = pd.date_range(start=start_date, end=end_date, freq="D")
 
     # Extend features for future dates
@@ -1202,8 +1020,11 @@ def compute_window_weights(
     else:
         n_past = 0
 
-    #GOPANANT
     weights = compute_weights_fast(
-        _lstm_model, features_df, start_date, end_date, n_past, locked_weights
+<<<<<<< Updated upstream
+        features_df, start_date, end_date, n_past, locked_weights
+=======
+        features_df, start_date, end_date, n_past, locked_weights, weights=weights
+>>>>>>> Stashed changes
     )
     return weights.reindex(full_range, fill_value=0.0)
